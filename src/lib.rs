@@ -4,6 +4,7 @@ pub mod assets;
 pub mod config;
 pub mod net;
 pub mod signal;
+pub mod ws;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,30 +18,36 @@ use axum::{Json, Router as AxumRouter};
 use serde::Serialize;
 
 use assets::Asset;
-use signal::PeerRegistry;
+use signal::{Hub, PeerRegistry, RateLimit};
 
 pub const APP_NAME: &str = "file_sharer";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone)]
 pub struct AppState {
-    pub registry: Arc<PeerRegistry>,
+    pub hub: Arc<Hub>,
     pub started: Arc<Instant>,
-    pub ice_servers: Arc<Vec<String>>,
 }
 
 impl AppState {
     pub fn new(max_peers: usize, ice_servers: Vec<String>) -> Self {
+        Self::with_rate_limit(max_peers, ice_servers, RateLimit::default())
+    }
+
+    pub fn with_rate_limit(max_peers: usize, ice_servers: Vec<String>, rate: RateLimit) -> Self {
         Self {
-            registry: Arc::new(PeerRegistry::new(max_peers)),
+            hub: Arc::new(Hub::new(max_peers, rate, ice_servers)),
             started: Arc::new(Instant::now()),
-            ice_servers: Arc::new(ice_servers),
         }
+    }
+
+    pub fn registry(&self) -> Arc<PeerRegistry> {
+        self.hub.registry().clone()
     }
 
     pub fn max_peers(&self) -> usize {
         // 注册表内部会把 0 收敛为 1，这里对外暴露同样的语义
-        self.registry.max_peers()
+        self.hub.max_peers()
     }
 }
 
@@ -71,6 +78,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(serve_index))
         .route("/api/health", get(health))
         .route("/api/info", get(info))
+        .route("/ws", get(ws::ws_handler))
         .fallback(get(serve_static_or_404))
         .with_state(state)
 }
@@ -83,11 +91,11 @@ async fn info(State(state): State<AppState>) -> impl IntoResponse {
     Json(InfoResponse {
         name: APP_NAME,
         version: VERSION,
-        peers: state.registry.count(),
+        peers: state.hub.count(),
         max_peers: state.max_peers(),
         uptime_ms: state.started.elapsed().as_millis() as u64,
         persistence: "none",
-        ice_servers: state.ice_servers.as_ref().clone(),
+        ice_servers: state.hub.ice_servers().to_vec(),
     })
 }
 
@@ -146,7 +154,7 @@ mod tests {
     #[test]
     fn state_starts_with_no_peers() {
         let state = AppState::new(4, vec![]);
-        assert_eq!(state.registry.count(), 0);
+        assert_eq!(state.registry().count(), 0);
         assert_eq!(state.max_peers(), 4);
     }
 }

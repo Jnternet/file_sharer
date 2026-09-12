@@ -88,7 +88,7 @@ async fn info_endpoint_reports_empty_bucket_and_no_persistence() {
 #[tokio::test]
 async fn info_endpoint_reflects_live_peer_count() {
     let state = AppState::new(16, vec![]);
-    let registry = state.registry.clone();
+    let registry = state.registry();
     let app = build_router(state);
 
     let (joined, _) = registry.join(Some("Alice")).unwrap();
