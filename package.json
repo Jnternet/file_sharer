@@ -4,6 +4,6 @@
   "type": "module",
   "description": "前端模块的测试宿主：无需安装任何依赖，使用 Node 内置测试运行器",
   "scripts": {
-    "test": "node --test tests/js/"
+    "test": "node --test \"tests/js/*.test.js\""
   }
 }
