@@ -12,6 +12,8 @@ import { mkdtempSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+import { sha256Hex } from '../web/lib/sha256.js';
+
 const ROOT = resolve(import.meta.dirname, '..');
 const BIN = join(ROOT, 'target/release/file_sharer');
 const PORT = Number(process.env.E2E_PORT ?? 18099);
@@ -191,6 +193,67 @@ async function evaluate(client, context, expression) {
   return raw === undefined ? undefined : JSON.parse(raw);
 }
 
+/** 从接收页的 IndexedDB 里读回某个文件的落盘数据。 */
+async function readStoredFile(client, context, transferId, fileIndex) {
+  const result = await evaluate(
+    client,
+    context,
+    `(async () => {
+      const open = indexedDB.open('file-sharer', 1);
+      const db = await new Promise((resolve, reject) => {
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error);
+      });
+      const chunks = await new Promise((resolve, reject) => {
+        const request = db.transaction('chunks').objectStore('chunks').getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const ordered = chunks
+        .filter((chunk) => chunk.transferId === ${JSON.stringify(transferId)} && chunk.fileIndex === ${fileIndex})
+        .sort((a, b) => a.chunkIndex - b.chunkIndex);
+      const out = new Uint8Array(ordered.reduce((sum, chunk) => sum + chunk.size, 0));
+      let offset = 0;
+      for (const chunk of ordered) {
+        out.set(new Uint8Array(chunk.bytes), offset);
+        offset += chunk.size;
+      }
+      return { bytes: [...out], chunks: ordered.length };
+    })()`,
+  );
+  return result;
+}
+
+/** 在接收页里找出已完成的传输。 */
+async function findCompletedTransfer(client, context, kind) {
+  return evaluate(
+    client,
+    context,
+    `(() => {
+      const transfers = [...window.fileSharer.state.transfers.values()];
+      const hit = transfers.find((item) => item.manifest?.kind === ${JSON.stringify(kind)} && item.status === 'complete');
+      if (!hit) {
+        return null;
+      }
+      return {
+        transferId: hit.manifest.transferId,
+        files: [...hit.files.values()].map((file) => ({ path: file.path, status: file.status, size: file.size })),
+      };
+    })()`,
+  );
+}
+
+function assertBytesEqual(actual, expected, label) {
+  if (actual.length !== expected.length) {
+    throw new Error(`${label} 长度不符：${actual.length} != ${expected.length}`);
+  }
+  for (let i = 0; i < expected.length; i++) {
+    if (actual[i] !== expected[i]) {
+      throw new Error(`${label} 第 ${i} 字节不符：${actual[i]} != ${expected[i]}`);
+    }
+  }
+}
+
 async function openTab(client, label) {
   const { context } = await client.call('browsingContext.create', { type: 'tab' });
   await client.call('browsingContext.navigate', { context, url: BASE, wait: 'complete' });
@@ -212,6 +275,11 @@ function sampleBytes(length, seed = 11) {
 
 const SAMPLE = sampleBytes(3000);
 const SAMPLE_NAME = '端到端测试.bin';
+
+const FOLDER_FILES = [
+  { path: 'e2e目录/说明.txt', bytes: [...new TextEncoder().encode('文件夹传输端到端验证')] },
+  { path: 'e2e目录/子目录/数据.bin', bytes: [...sampleBytes(2048, 23)] },
+];
 
 // ---------------------------------------------------------------- 主流程
 
@@ -308,59 +376,121 @@ async function main() {
   log('B 页显示接收完成且哈希校验通过');
 
   // 从 B 页 IndexedDB 读回真实落盘数据，逐字节比对
-  const received = await evaluate(
+  const single = await waitFor('接收页登记单文件传输', () =>
+    findCompletedTransfer(client, tabB, 'single'),
+  );
+  if (single.files[0].path !== SAMPLE_NAME) {
+    throw new Error(`文件名不符：${single.files[0].path} != ${SAMPLE_NAME}`);
+  }
+  const received = await readStoredFile(client, tabB, single.transferId, 0);
+  assertBytesEqual(received.bytes, [...SAMPLE], '单文件内容');
+  log(
+    `单文件端到端通过：${SAMPLE_NAME}（${SAMPLE.length} 字节，${received.chunks} 块）经 WebRTC 直传，` +
+      `接收端哈希校验通过且逐字节一致，服务器未参与数据搬运`,
+  );
+
+  // ---------------------------------------------------------------- 文件夹 + ZIP
+  await evaluate(
+    client,
+    tabA,
+    `(async () => {
+      const specs = ${JSON.stringify(FOLDER_FILES)};
+      const entries = specs.map((spec) => {
+        const name = spec.path.split('/').pop();
+        const file = new File([new Uint8Array(spec.bytes)], name, { type: 'application/octet-stream' });
+        // 拖放文件夹时浏览器会带 webkitRelativePath，这里直接构造等价对象
+        Object.defineProperty(file, 'webkitRelativePath', { value: spec.path });
+        return { file, path: spec.path };
+      });
+      await window.fileSharer.sendEntries(entries);
+      return entries.map((entry) => entry.path);
+    })()`,
+  );
+  log('已在 A 页以"文件夹"形式发送 2 个文件（含子目录）');
+
+  const folder = await waitFor('接收页完成文件夹传输', () =>
+    findCompletedTransfer(client, tabB, 'folder'),
+  );
+  const folderPaths = folder.files.map((file) => file.path).sort();
+  const expectedPaths = FOLDER_FILES.map((file) => file.path).sort();
+  if (JSON.stringify(folderPaths) !== JSON.stringify(expectedPaths)) {
+    throw new Error(`目录结构不符：${JSON.stringify(folderPaths)}`);
+  }
+  for (const [index, spec] of FOLDER_FILES.entries()) {
+    const fileIndex = folder.files.findIndex((file) => file.path === spec.path);
+    const stored = await readStoredFile(client, tabB, folder.transferId, fileIndex);
+    assertBytesEqual(stored.bytes, spec.bytes, `文件夹内容 ${spec.path}`);
+    void index;
+  }
+
+  // 浏览器里真实跑一遍 ZIP 打包（数据来自 IndexedDB）
+  const zip = await evaluate(
     client,
     tabB,
     `(async () => {
-      const open = indexedDB.open('file-sharer', 1);
-      const db = await new Promise((resolve, reject) => {
-        open.onsuccess = () => resolve(open.result);
-        open.onerror = () => reject(open.error);
-      });
-      const transfers = await new Promise((resolve, reject) => {
-        const request = db.transaction('transfers').objectStore('transfers').getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      const latest = transfers.at(-1);
-      const chunks = await new Promise((resolve, reject) => {
-        const request = db.transaction('chunks').objectStore('chunks').getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      const ordered = chunks
-        .filter((chunk) => chunk.transferId === latest.transferId && chunk.fileIndex === 0)
-        .sort((a, b) => a.chunkIndex - b.chunkIndex);
-      const out = new Uint8Array(ordered.reduce((sum, chunk) => sum + chunk.size, 0));
-      let offset = 0;
-      for (const chunk of ordered) {
-        out.set(new Uint8Array(chunk.bytes), offset);
-        offset += chunk.size;
+      const bytes = await window.fileSharer.buildZipFor(${JSON.stringify(folder.transferId)});
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const eocd = bytes.length - 22;
+      const count = view.getUint16(eocd + 10, true);
+      const centralOffset = view.getUint32(eocd + 16, true);
+      const decoder = new TextDecoder();
+      const names = [];
+      let offset = centralOffset;
+      for (let i = 0; i < count; i++) {
+        const nameLength = view.getUint16(offset + 28, true);
+        names.push(decoder.decode(bytes.subarray(offset + 46, offset + 46 + nameLength)));
+        offset += 46 + nameLength;
       }
-      return { path: latest.manifest.files[0].path, bytes: [...out], chunks: ordered.length };
+      return { names, size: bytes.length, bytes: [...bytes] };
     })()`,
   );
-
-  const expected = [...SAMPLE];
-  if (received.path !== SAMPLE_NAME) {
-    throw new Error(`文件名不符：${received.path} != ${SAMPLE_NAME}`);
-  }
-  if (received.bytes.length !== expected.length) {
-    throw new Error(`长度不符：${received.bytes.length} != ${expected.length}`);
-  }
-  for (let i = 0; i < expected.length; i++) {
-    if (received.bytes[i] !== expected[i]) {
-      throw new Error(`第 ${i} 字节不符：${received.bytes[i]} != ${expected[i]}`);
+  for (const expected of [...expectedPaths, 'e2e目录/', 'e2e目录/子目录/']) {
+    if (!zip.names.includes(expected)) {
+      throw new Error(`ZIP 缺少条目 ${expected}：${JSON.stringify(zip.names)}`);
     }
   }
 
+  // 把浏览器里打出来的 ZIP 交给 python3 独立校验（结构与 CRC）
+  const zipPath = join(mkdtempSync(join(tmpdir(), 'file-sharer-zip-')), 'browser.zip');
+  writeFileSync(zipPath, new Uint8Array(zip.bytes));
+  const verified = await verifyZipWithPython(zipPath);
+  for (const spec of FOLDER_FILES) {
+    if (verified[spec.path] !== sha256Hex(new Uint8Array(spec.bytes))) {
+      throw new Error(`ZIP 中 ${spec.path} 的内容哈希不符`);
+    }
+  }
   log(
-    `端到端通过：${SAMPLE_NAME}（${SAMPLE.length} 字节，${received.chunks} 块）经 WebRTC 直传，` +
-      `接收端哈希校验通过且逐字节一致，服务器未参与数据搬运`,
+    `文件夹端到端通过：${expectedPaths.length} 个文件按目录结构接收并校验一致，` +
+      `浏览器内打包 ZIP 成功（${zip.size} 字节，条目 ${zip.names.length} 个，python3 解压校验通过）`,
   );
 
   client.close();
   cleanup();
+}
+
+async function verifyZipWithPython(zipPath) {
+  const script = `
+import hashlib, json, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as zf:
+    bad = zf.testzip()
+    assert bad is None, f"CRC 校验失败: {bad}"
+    print(json.dumps({i.filename: hashlib.sha256(zf.read(i.filename)).hexdigest()
+                      for i in zf.infolist() if not i.is_dir()}))
+`;
+  const child = spawn('python3', ['-c', script, zipPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  let err = '';
+  child.stdout.on('data', (chunk) => {
+    out += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    err += chunk;
+  });
+  const code = await new Promise((resolve) => child.on('close', resolve));
+  if (code !== 0) {
+    throw new Error(`python3 校验 ZIP 失败：${err.trim()}`);
+  }
+  return JSON.parse(out);
 }
 
 main().catch((error) => {

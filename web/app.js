@@ -376,19 +376,10 @@ async function downloadFile(transferId, fileIndex, path) {
 }
 
 async function downloadZip(transferId) {
-  const transfer = state.transfers.get(transferId);
-  if (!transfer) {
-    return;
-  }
   try {
-    const entries = [...transfer.files.values()]
-      .sort((a, b) => a.i - b.i)
-      .map((file) => ({
-        path: file.path,
-        size: file.size,
-        chunks: () => state.store.readChunks(transferId, file.i),
-      }));
-    const zip = await buildStoreZip(entries);
+    const zip = await buildZipFor(transferId);
+    const transfer = state.transfers.get(transferId);
+    const entries = [...(transfer?.files.values() ?? [])];
     triggerDownload(new Blob([zip], { type: 'application/zip' }), zipNameFor(entries.map((e) => e.path)));
   } catch (error) {
     if (error.code === 'too-large') {
@@ -397,6 +388,22 @@ async function downloadZip(transferId) {
     }
     toast(`打包失败：${error.message}`);
   }
+}
+
+/** 把某个已接收传输打包成 store ZIP（供 UI 下载与端到端测试使用）。 */
+async function buildZipFor(transferId) {
+  const transfer = state.transfers.get(transferId);
+  const entries = [...(transfer?.files.values() ?? [])]
+    .sort((a, b) => a.i - b.i)
+    .map((file) => ({
+      path: file.path,
+      size: file.size,
+      chunks: () => state.store.readChunks(transferId, file.i),
+    }));
+  if (entries.length === 0) {
+    throw new Error(`找不到传输 ${transferId}`);
+  }
+  return buildStoreZip(entries);
 }
 
 async function collect(iterable) {
@@ -702,3 +709,11 @@ boot().catch((error) => {
   toast(`初始化失败：${error.message}`);
   setStatus('err', '初始化失败');
 });
+
+// 自动化/调试入口：浏览器的文件选择器无法被脚本驱动，端到端测试需要它
+// 直接调用发送与打包逻辑（scripts/e2e-browser.mjs 使用）。
+window.fileSharer = {
+  sendEntries,
+  buildZipFor,
+  state,
+};
