@@ -3,9 +3,80 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>局域网文件直传</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="icon" href="data:," />
   </head>
   <body>
-    <p>占位页面：UI 将在迭代 9 完成。</p>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">⇄</span>
+        <div>
+          <h1>局域网文件直传</h1>
+          <p class="subtitle">浏览器之间点对点传输 · 服务器零存储 · 每次启动都是空桶</p>
+        </div>
+      </div>
+      <div class="status">
+        <span id="conn-status" class="pill pill-warn">连接中…</span>
+        <label class="name-field">
+          我的名字
+          <input id="name-input" type="text" maxlength="32" placeholder="访客" />
+        </label>
+      </div>
+    </header>
+
+    <main>
+      <section class="card send-card">
+        <h2>发送</h2>
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <p class="drop-title">拖入文件或文件夹</p>
+          <p class="drop-hint">自动识别：单个文件直传，多个文件/文件夹按目录结构打包</p>
+          <div class="drop-actions">
+            <button id="pick-file" type="button" class="btn">选择文件</button>
+            <button id="pick-folder" type="button" class="btn btn-ghost">选择文件夹</button>
+          </div>
+          <input id="file-input" type="file" multiple hidden />
+          <input id="folder-input" type="file" webkitdirectory hidden />
+        </div>
+        <label class="target-field">
+          发送给
+          <select id="target-select">
+            <option value="all">全部在线设备</option>
+          </select>
+        </label>
+        <div id="hash-progress" class="hash-progress" hidden>
+          <span>正在校验（上传前 SHA-256）…</span>
+          <progress id="hash-bar" max="100" value="0"></progress>
+        </div>
+      </section>
+
+      <section class="card peer-card">
+        <h2>在线设备 <span id="peer-count" class="badge">0</span></h2>
+        <ul id="peer-list" class="peer-list"></ul>
+        <p class="hint">
+          两台设备互相看到后即可直传。对方不在线时无法投递——文件不会经过服务器暂存。
+        </p>
+      </section>
+
+      <section class="card transfers-card">
+        <h2>
+          传输
+          <button id="clear-received" type="button" class="btn btn-ghost btn-small">清空接收区</button>
+        </h2>
+        <ul id="transfers" class="transfers"></ul>
+        <p id="transfers-empty" class="hint">还没有传输记录。</p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span id="server-info">—</span>
+      <span class="dot">·</span>
+      <span>接收区数据存在本机浏览器（IndexedDB），用于断点续传与重复下载。</span>
+    </footer>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module" src="/app.js"></script>
   </body>
 </html>
