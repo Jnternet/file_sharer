@@ -1,216 +1,190 @@
-# 局域网文件直传工具 — 设计文档
+# 局域网文件直传 — 设计文档（记录区模型）
 
-> 先设计、再实现。本文档是实现的契约：协议、边界、测试策略都先在这里定稿，
-> 代码与测试按本文档逐条落地（每个功能一条提交，见文末迭代计划）。
+> 先设计、再实现。本文档是实现契约：模型、协议、边界、测试策略先定稿，代码与测试按条目落地。
 
-## 1. 目标（需求 → 设计决策）
+## 1. 模型（本项目的核心）
+
+网页是一个**记录区**：记录"哪些文件/文件夹可以被下载"。选择文件时**只登记文件位置**（元信息），
+**不传输任何字节**；别人在记录区里**点击下载**之后，才真正开始传输；数据经服务器**定向转发**，
+服务器**不记录、不留存**，只把收到的数据转给请求方。
+
+```
+分享者 A 的浏览器                                 下载者 B 的浏览器
+┌───────────────────────────┐                  ┌───────────────────────────┐
+│ 选择文件/文件夹            │                  │ 记录区（可下载清单）       │
+│  → 只登记"位置"：          │   ① 拉取索引     │  ← 拉取到 A 的登记项       │
+│    名称/大小/相对路径/哈希  │ ◀─────────────── │                           │
+│  （字节一个都不发）         │   ② 点击「下载」 │                           │
+│                            │ ───────────────▶ │                           │
+│ ③ 收到请求才逐块发送        │                  │ ④ 边收边落盘 + 流控 ACK    │
+│ ⑤ 落盘后复算 SHA-256 校验   │ ◀─────────────── │                           │
+│                            │                  │ ⑥ 显式点「保存」才落盘下载  │
+└───────────────────────────┘                  └───────────────────────────┘
+              ▲                                             ▲
+              └──────── 服务器：只做定向转发 ────────────────┘
+                 （无广播、无记录、无留存、不解析文件内容）
+```
+
+### 1.1 明确定否定的三件事
+
+| 否定项 | 含义 | 设计保证 |
+|---|---|---|
+| 不广播 | 服务器不向任何连接主动推送；记录不下发给所有人，数据也不发给所有人 | 服务器只有"请求—应答"与"定向转发"两类行为；有测试断言空闲连接收不到任何消息 |
+| 不无操作直接下载 | 没有点击下载就不传输；传完也不自动保存 | 分享者仅在收到 `download-request` 后才发字节；下载者校验通过后只出现「保存」按钮 |
+| 不留存 | 服务器不保存文件内容，也不记录文件清单 | 服务器源码里没有任何文件元数据概念（架构测试扫描），也没有落盘调用；清单只存在于各浏览器 |
+
+## 2. 需求 → 设计
 
 | # | 需求 | 设计决策 |
 |---|---|---|
-| R1 | 单产物 | Rust 一次 `cargo build --release` 产出唯一可执行文件；前端 HTML/CSS/JS 用 `include_dir!` 编译期内嵌，运行时不需要任何外部文件、不需要 node |
-| R2 | 网页访问 | axum 提供静态站点 + JSON API + WebSocket 信令；启动时打印本机与局域网地址 |
-| R3 | 每次启动都是空桶 | 服务端**没有任何持久化路径**：不写文件、不建数据库、不缓存字节；内存里只保留"在线用户名单"，进程退出即归零。用架构测试（源码扫描）守住这条约束 |
-| R4 | 人人可选文件并在线实时传（不预先传给服务器） | 浏览器之间 WebRTC DataChannel 点对点直传；服务器只做信令（SDP/ICE 透传），**永远看不到文件字节** |
-| R5 | 断点续传 | 分块 + 内容寻址传输 ID + 接收端 IndexedDB 落盘已收块 + 重连后 `resume-state` 协商续传偏移 |
-| R6 | 自动 hash 校验（上传前 / 下载完成后） | 纯 JS 流式 SHA-256：发送前对源文件预哈希 → 传输中边发边重算（检测本地文件被改动）→ 接收端写完后再对落盘数据复算校验 |
-| R7 | 单文件与文件夹，自动区分 | 拖放用 `webkitGetAsEntry()` 判定目录；多文件/目录一律按"文件夹"语义传输（保留相对路径），单文件按单文件传输；用户不需要手动切换模式 |
-| R8 | git 管理 + 小步迭代 | 每个功能一次提交，提交内含实现 + 配套测试；见 §8 |
-| R9 | 所有功能代码都有配套测试 | 三层测试：Rust 单元/集成（HTTP、WS、信令、并发上限）、Node 单元/协议回环（SHA-256、分帧、ZIP、发送/接收核心、续传、篡改检出）、架构测试（无持久化、无上传路由） |
+| R1 | 单产物 | Rust 一次 `cargo build --release` 产出唯一可执行文件；前端资源 `include_dir!` 编译期内嵌 |
+| R2 | 网页访问 | axum 提供静态站点 + JSON API + WebSocket 转发通道；启动打印本机/局域网地址 |
+| R3 | 每次启动都是空桶 | 服务器只持有内存中的"在线会话 → 转发通道"映射，进程退出即清空；不落盘、不记录文件 |
+| R4 | 网页是记录区 | 记录区 = 各浏览器本地持有的登记项；别人的条目靠**拉取**得到（不是服务器推送） |
+| R5 | 选择文件只记录位置 | 选择后只读取元信息（名称/大小/相对路径）并本地计算 SHA-256；**不发送任何文件字节** |
+| R6 | 点击下载才传输 | 下载者点击 → `download-request` → 分享者开始流式分块发送；服务器逐帧定向转发 |
+| R7 | 服务器只做转发 | 文本消息按 `to` 定向转发；二进制帧转发给该连接绑定的目标；不解析内容、不缓存、不落盘 |
+| R8 | 不广播 | 会话列表靠 `sessions` 拉取；索引靠 `index-request` 拉取；数据只发给请求方 |
+| R9 | 不自动下载 | 接收端校验通过后仅显示「保存」/「打包下载」，用户点击才触发下载 |
+| R10 | 断点续传 | 接收端 IndexedDB 存块 + `resume-state` 协商偏移；中断后再次点击下载即从断点继续 |
+| R11 | 自动 hash 校验（上传前 / 下载完成后） | 登记时预哈希；发送中复算检出源文件被改；接收端落盘后复算比对，失败要求重传 |
+| R12 | 单文件/文件夹自动区分 | 单文件按文件登记；多文件或带目录结构按文件夹登记（保留相对路径），下载后可打包 ZIP |
+| R13 | git 小步迭代 + 全功能测试 | 每个功能一次提交（含测试）；Rust 单元/集成/架构 + JS 单元/协议回环 + 真实浏览器 e2e |
 
-## 2. 非目标（明确的边界）
+## 3. 服务器（唯一职责：定向转发）
 
-- 不做账号、权限、加密传输（局域网内网、明文 HTTP；文档中明示信任模型）。
-- 不做服务端存储/中转/离线消息：服务器**不是**文件中转站，接收方不在线就无法投递。
-- 不依赖公网：默认不使用 STUN/TURN（局域网 host candidate 足够）。若网络禁用 mDNS，可用 `--ice-server` 追加 STUN。
-- 不追求 IE/老浏览器兼容；目标 Chrome/Edge/Firefox/Safari 近两年版本。
-- 不做压缩（文件夹打包为 **store 模式 ZIP**，不压缩，仅用于保留目录结构）。
-
-## 3. 架构
+### 3.1 结构
 
 ```
-        ┌──────────────────────────── 浏览器 A（发送方） ────────────────────────────┐
-        │  选择文件/拖放 → 自动识别单文件 or 文件夹                                   │
-        │  预哈希(SHA-256, 分片读)  →  构建 manifest(内容寻址 transferId)              │
-        │  ┌─────────────┐   文本帧=JSON 控制消息 / 二进制帧=数据块                    │
-        │  │ 发送核心     │◄──────────────────────────────────────────┐               │
-        │  └──────┬──────┘                                           │               │
-        └─────────┼──────────────────────────────────────────────────┼───────────────┘
-                  │  WebRTC DataChannel（P2P，字节不经过服务器）        │
-        ┌─────────▼──────────────────────────────────────────────────┴───────────────┐
-        │  浏览器 B（接收方）                                                          │
-        │  接收核心：完整块 → IndexedDB 落盘 → 定期 ACK(流控) → 完成后复算 SHA-256      │
-        │  校验通过 → 单文件直接下载 / 文件夹打包 ZIP 下载；校验失败 → 丢弃并要求重传     │
-        └─────────────────────────────────────────────────────────────────────────────┘
-                  ▲  信令（仅此一处经过服务器，且不含文件字节）
-                  │
-        ┌─────────┴───────────────────────────────────────────────────────────────────┐
-        │  服务器（Rust，单可执行文件）                                                │
-        │  GET /            → 内嵌 index.html                                          │
-        │  GET /assets/*    → 内嵌静态资源                                             │
-        │  GET /api/info    → {version, peers, uptime, persistence:"none"}             │
-        │  GET /api/health  → ok                                                       │
-        │  GET /ws          → 在线名单广播 + 信令透明转发（消息上限 64 KiB）             │
-        │  内存态：peer 名单（进程退出即清空，即"空桶"）                                 │
-        └─────────────────────────────────────────────────────────────────────────────┘
+src/main.rs   CLI、绑定端口、打印局域网地址、优雅退出
+src/lib.rs    路由装配：GET / 、/api/* 、/ws
+src/assets.rs 内嵌前端资源（MIME / ETag / 路径穿越防护）
+src/signal.rs 会话表（id → 名称 + 发件箱）、限流、协议类型与解析
+src/ws.rs     WebSocket 处理：hello 门禁、按 to 定向转发、二进制帧按绑定转发
 ```
 
-### 3.1 目录结构
+服务器**只知道**：谁在线（会话 id + 显示名）、每条连接绑定的转发目标（临时的路由状态）。
+它**不知道**：文件名、路径、大小、哈希、传输进度、传输内容。
 
-```
-Cargo.toml            单 crate，产出单二进制
-src/main.rs           CLI 解析、绑定端口、局域网地址探测、优雅退出
-src/lib.rs            路由器组装（可被测试直接调用）
-src/config.rs         启动参数与校验
-src/assets.rs         内嵌静态资源 + MIME/缓存头
-src/signal.rs         WebSocket 信令：名单、路由、限额
-src/net.rs            局域网 IP 探测与 URL 打印
-web/index.html        单页 UI
-web/styles.css
-web/app.js            浏览器粘合层（DOM、WebRTC、IndexedDB、下载）
-web/lib/sha256.js     流式 SHA-256（自实现，纯 JS，无依赖）
-web/lib/framing.js    二进制分帧编解码
-web/lib/protocol.js   控制消息构造/校验
-web/lib/plan.js       选择结果 → 传输计划（自动区分文件/文件夹）、分块与续传偏移计算
-web/lib/window.js     发送窗口/流控
-web/lib/zip.js        store 模式 ZIP 打包（目录结构保留）
-web/lib/sender.js     发送核心（可注入传输与文件源 → Node 可测）
-web/lib/receiver.js   接收核心（可注入块存储 → Node 可测）
-tests/                Rust 集成测试
-tests/js/             Node 单元/回环测试
-scripts/              便捷脚本（跑全部测试、冒烟）
-```
+### 3.2 线协议
 
-## 4. 协议（契约）
+客户端 → 服务器（文本帧 = JSON）：
 
-### 4.1 信令（浏览器 ⇄ 服务器，`/ws`，JSON 文本帧）
+| 消息 | 说明 |
+|---|---|
+| `{"t":"hello","name":"..."}` | 建立会话（必须是第一条消息） |
+| `{"t":"sessions"}` | 拉取在线会话列表（不是推送） |
+| `{"t":"relay","to":"<id>","payload":{...}}` | 定向转发一段 JSON 负载（服务器不解析 payload） |
+| `{"t":"bind","to":"<id>"}` | 把本连接后续的二进制帧绑定到该目标 |
+| `{"t":"unbind"}` | 解除绑定 |
 
-| 方向 | 消息 | 说明 |
-|---|---|---|
-| C→S | `{"t":"hello","name":"..."}` | 注册显示名（可选，缺省用 `访客-xxxx`） |
-| S→C | `{"t":"welcome","self":{...},"peers":[...]}` | 连接成功后下发自身 ID 与在线名单 |
-| S→C | `{"t":"peers","peers":[{id,name}]}` | 名单变化广播 |
-| C→S | `{"t":"signal","to":"<peerId>","data":{...}}` | 转发 SDP/ICE，服务器不解析 `data` |
-| S→C | `{"t":"signal","from":"<peerId>","data":{...}}` | 转发给目标；目标离线则回 `error` |
-| S→C | `{"t":"error","code":"...","message":"..."}` | `bad-request` / `too-large` / `unknown-peer` / `rate-limited` |
+服务器 → 客户端：
 
-约束：文本帧 ≤ 64 KiB（SDP 通常在 4 KiB 内）；每连接信令速率限制（60 msg/s）；在线人数上限 `--max-peers`（默认 64）。
+| 消息 | 触发条件 |
+|---|---|
+| `{"t":"welcome","self":{id,name}}` | 回应 hello |
+| `{"t":"sessions","sessions":[{id,name}]}` | 回应 sessions |
+| `{"t":"relay","from":"<id>","payload":{...}}` | 转发别人的定向负载 |
+| `{"t":"error","code":"...","message":"..."}` | 回应当前请求（如目标不在线） |
 
-### 4.2 数据通道（浏览器 ⇄ 浏览器，RTCDataChannel `fs`，有序可靠）
+二进制帧：`{"t":"bind"}` 之后，连接上收到的二进制帧原样转发给绑定目标；
+服务器不修改帧内容（只做长度上限保护）。没有绑定时回一次 `error: unbound`。
 
-- **文本帧** = JSON 控制消息；**二进制帧** = 数据块。
-- 二进制帧格式（大端）：
+限额：文本帧 ≤ 64 KiB、二进制帧 ≤ 2 MiB、每连接速率限制、在线会话上限（默认 64）。
 
-```
-offset 0   : u8   kind = 1（数据块）
-offset 1   : u32  fileIndex
-offset 5   : u64  chunkIndex
-offset 13  : payload[chunkSize]
-```
+## 4. 浏览器之间的负载协议（服务器不可见语义）
 
-固定 **chunkSize = 1 MiB**（可协商，但同一 transferId 必须一致；写入 manifest）。块边界由 `chunkIndex * chunkSize` 决定，保证续传偏移可复算。
+负载放在 `relay.payload` 里，端到端使用；服务器只做搬运。
 
-### 4.3 传输流程
-
-```
-发送方                                          接收方
-  │ 预哈希全部文件（进度：校验中 x%）              │
-  │ ── manifest ───────────────────────────────► │  查 IndexedDB：这个 transferId/文件已有多少块
-  │ ◄──────────────────────── resume-state ───── │  （全新传输则为 0）
-  │ 从 resume 偏移开始逐块发送（窗口 8 MiB）       │
-  │ ── binary chunk ───────────────────────────► │  完整块 → IndexedDB
-  │ ◄──────────────────────────── ack(周期) ──── │  每 2 MiB 或 150 ms
-  │ ... 单文件发完 → file-done                     │
-  │ ◄── file-done{status:ok|hash-mismatch} ───── │  流式复算 SHA-256 对比 manifest
-  │ 全部完成 → transfer-done                      │  ok → 提供下载；失败 → 丢弃并要求重传
-```
-
-控制消息集合：
+### 4.1 记录区索引（登记"文件位置"）
 
 | 消息 | 字段 |
 |---|---|
-| `manifest` | `transferId, kind:"single"\|"folder", senderName, chunkSize, totalBytes, files:[{i,path,size,sha256,mime}]` |
-| `resume-query` | `transferId`（接收端主动查问时用；正常由 manifest 触发） |
-| `resume-state` | `transferId, files:[{i,received}]` |
-| `ack` | `transferId, i, received`（已落盘的字节数） |
-| `file-done` | `transferId, i, status:"ok"\|"hash-mismatch"\|"incomplete", sha256` |
-| `transfer-done` | `transferId, status:"ok"\|"partial"` |
-| `cancel` | `transferId, reason` |
-| `error` | `transferId, message` |
+| `index-request` | `{}`（拉取对方的登记项） |
+| `index` | `{entries:[{shareId, kind:"single"\|"folder", name, totalBytes, fileCount, chunkSize, createdAt, files:[{path,size,sha256,mime}]}]}` |
 
-### 4.4 内容寻址的传输 ID（续传的关键）
+`shareId` 内容寻址：`sha256(排序后的 "路径\n大小\n内容哈希").slice(0,32)`，
+因此"同一批文件"对应同一个 ID，与谁在分享、什么时候分享无关。索引里**没有文件内容**。
 
-```
-transferId = sha256( sortedFiles.map(f => `${f.path}\n${f.size}\n${f.sha256}`).join("\n") ).slice(0,32)
-```
+### 4.2 传输（点击下载之后才发生）
 
-因为"发送前预哈希"是 R6 的硬要求，我们顺手拿到了每个文件的内容哈希，于是：
-
-- 传输身份与"谁发的/什么时候发的"无关，只与内容有关；
-- 发送方刷新页面后重新选中同一批文件 → 得到同一 `transferId` → 接收方命中已有分块，从断点继续；
-- 内容变了（改了文件）→ 新 `transferId`，不会错误地拼接到旧数据上。
-
-接收端按 `[transferId, fileIndex, chunkIndex]` 存块，元数据里记录 `path/size/sha256`，因此断点数据自带"该有的样子"。
-
-### 4.5 校验（三重）
-
-1. **上传前**：发送方对源文件流式 SHA-256，结果写入 manifest（进度可见）。
-2. **传输中**：发送方对"实际发出的字节"再算一次 SHA-256，结束后与预哈希比对 → 检出本地文件在传输期间被修改/截断，直接 `cancel` 并报错。
-3. **下载完成后**：接收方对 IndexedDB 中落盘的数据流式复算 SHA-256，与 manifest 比对 → 不匹配则丢弃该文件分块、回 `hash-mismatch`，发送方自动重试一次（从 0 开始）。
-
-### 4.6 流控
-
-接收方每 2 MiB 或 150 ms 发一次 `ack`；发送方维持"未确认字节 ≤ 8 MiB"的窗口，窗口满则等待。避免把接收端 IndexedDB 写队列和发送端内存打爆。
-
-## 5. 空桶与安全边界
-
-- 服务器只监听套接字与内存名单：`src/` 中禁止出现 `File::create` / `fs::write` / `OpenOptions` 等落盘调用（架构测试扫描源码强制）。
-- 服务器没有任何"文件上传"路由：架构测试断言 `POST /upload` → 404，源码中不存在接收文件体量的处理。
-- 信任模型：**任何能访问该端口的人都能发/收文件**，符合需求原意（局域网内共享工具）；不要在不可信网络（咖啡馆 Wi‑Fi、公网端口映射）上暴露。README 写明。
-- 资源上限：`--max-peers`（默认 64）、单帧 64 KiB（信令）、信令速率限制、HTTP 请求体上限（无 body 路由，直接 405/404）。
-- 接收端存储：IndexedDB 保存已接收分块（用于断点续传与下载），页面提供"清空接收区"。**服务器端为零存储**。
-
-## 6. 浏览器兼容与关键技术点
-
-- `crypto.subtle` 在 `http://192.168.x.x`（非安全上下文）下**不可用**，因此 SHA-256 自己实现流式版本（`web/lib/sha256.js`），并用 Node 的 `crypto` 做对照测试。
-- 下载走 `Blob` + `<a download>`（非安全上下文可用）；不使用 `showSaveFilePicker`。
-- 文件夹选择用 `<input type="file" webkitdirectory>`（非安全上下文可用）；拖放用 `webkitGetAsEntry()`。
-- WebRTC 局域网直连依赖 host candidate；Chrome 的 mDNS 候选在单播 DNS 可用的局域网可正常解析。若网络屏蔽 mDNS，用 `--ice-server stun:...` 兜底。
-
-## 7. 测试策略（每条需求都要有可执行的验证）
-
-| 层 | 工具 | 覆盖 |
+| 消息 | 方向 | 说明 |
 |---|---|---|
-| Rust 单元 | `cargo test` | 配置校验、资源 MIME/ETag、信令名单与路由、限额、局域网 IP 探测 |
-| Rust 集成 | `axum` + `tower::ServiceExt` + 本地端口 + `tokio-tungstenite` | 静态站点、API、404/405、WebSocket 握手、welcome/peers 广播、信令转发、超限报错、断开后名单清理 |
-| 架构 | `cargo test` | 无落盘调用；无上传路由；内嵌资源存在 index.html |
-| JS 单元 | `node --test`（零依赖） | SHA-256 对照向量/分块等价/大输入、分帧编解码与畸形输入、协议消息校验、传输计划与自动区分、续传偏移、流控窗口、CRC32/ZIP 结构 |
-| JS 协议回环 | `node --test` | sender-core ↔ receiver-core 用内存管道对接：正常传输、断线续传、篡改数据必被检出、块乱序/重复幂等、文件夹打包 |
-| 冒烟 | `scripts/smoke.sh` | 构建产物单独放进空目录启动 → `curl` 校验页面/API/404/405 |
-| 浏览器 e2e | `scripts/e2e-browser.mjs`（无头 Firefox + WebDriver BiDi） | 两个真实标签页建立 WebRTC 直连 → 真实 File 拖放 → 接收端 IndexedDB 逐字节比对 → 文件夹 ZIP 打包并由 python3 解压校验 |
+| `download-request` | 下载者 → 分享者 | `{shareId, streamId}`：请开始传输（`streamId` 由下载者分配，用于区分并发流） |
+| `manifest` | 分享者 → 下载者 | 该次传输的权威描述（文件清单 + 每文件 SHA-256 + chunkSize + streamId） |
+| `resume-state` | 下载者 → 分享者 | 每个文件已完整收到的字节数（首次为 0） |
+| 二进制数据帧 | 分享者 → 下载者 | `[kind:u8][streamId:u32][fileIndex:u32][chunkIndex:u64][payload]`（大端） |
+| `ack` | 下载者 → 分享者 | 已落盘进度（每 2 MiB 或 150 ms），用于流控 |
+| `file-done` | 下载者 → 分享者 | `ok` / `hash-mismatch`（校验不通过则丢弃并要求重传） |
+| `transfer-done` | 下载者 → 分享者 | 全部文件校验通过 |
+| `cancel` / `error` | 双向 | 取消与错误 |
 
-## 8. 迭代计划（每次提交 = 一个小步，含测试）
+分块固定 1 MiB；`streamId` 让下载者能同时从多个分享者接收（服务器按连接绑定转发，帧内自带流标识）。
 
-| 序 | 提交 | 内容 | 验证 |
-|---|---|---|---|
-| 1 | `chore: 设计文档与项目脚手架` | DESIGN/README/Cargo 依赖/脚本 | `cargo check` |
-| 2 | `feat(server): 内嵌静态站点与 /api 路由` | assets/lib/config/net | Rust 单元 + HTTP 集成测试 |
-| 3 | `feat(signal): WebSocket 信令与在线名单` | signal.rs | WS 集成测试（名单广播/转发/限额/清理） |
-| 4 | `feat(web): 流式 SHA-256 与二进制分帧` | sha256.js/framing.js/protocol.js | Node 单测（对照 Node crypto） |
-| 5 | `feat(web): 传输计划（自动区分文件/文件夹）与流控` | plan.js/window.js | Node 单测 |
-| 6 | `feat(web): 接收核心与断点续传` | receiver.js + 内存块存储 | Node 单测 + 回环 |
-| 7 | `feat(web): 发送核心与三重校验` | sender.js | Node 回环（续传/篡改/重试） |
-| 8 | `feat(web): ZIP 打包与下载` | zip.js | Node 单测（结构可解析） |
-| 9 | `feat(web): 浏览器 UI 与 WebRTC 粘合层` | index.html/styles.css/app.js | 冒烟脚本 + 手工/浏览器验证 |
-| 10 | `docs: 使用说明与安全边界` + 收尾 | README/scripts | 全量测试 + 构建产物冒烟 |
-| 11 | `fix: 端到端验证发现的三处缺陷` | 名单含自己、answer 触发重建、IndexedDB 游标长事务 | 浏览器 e2e 复现 → 修复 → 回归测试 |
-| 12 | `test(e2e): 真实浏览器端到端` | 单文件 + 文件夹 + ZIP（python3 独立解压校验） | `scripts/e2e-browser.mjs` 全绿 |
+### 4.3 三重校验
 
-## 9. 已知风险与对策
+1. **登记时（上传前）**：本地流式 SHA-256，写进索引与 manifest；
+2. **发送中**：分享者对自己实际读出的字节复算哈希，结束后与登记值比对，不一致立即取消；
+3. **下载完成后**：下载者对 IndexedDB 里落盘的数据复算 SHA-256，与 manifest 比对，
+   不一致则删除该文件的块、回报 `hash-mismatch`，分享者自动重传（默认 1 次）。
 
-| 风险 | 对策 |
+### 4.4 断点续传
+
+接收端按 `[shareId, fileIndex, chunkIndex]` 存块；再次点击下载时把每个文件的已收偏移回给对方，
+分享者从 `floor(received / chunkSize)` 号块继续（只重传缺失的块与最后一块）。
+
+## 5. 目录结构
+
+```
+Cargo.toml / package.json / scripts/
+src/{main,lib,assets,config,net,signal,ws}.rs     服务器（转发 + 会话 + 静态资源）
+web/index.html, web/styles.css, web/app.js        记录区界面与接线
+web/lib/sha256.js        流式 SHA-256（非安全上下文没有 crypto.subtle，必须自实现）
+web/lib/framing.js       二进制数据帧编解码（含 streamId）
+web/lib/protocol.js      负载协议：索引 / manifest / resume / ack / file-done / cancel / error
+web/lib/share-index.js   选择结果 → 登记项（自动区分单文件/文件夹）+ shareId
+web/lib/plan.js          分块与续传算术
+web/lib/window.js        发送窗口流控
+web/lib/sender.js        分享者侧：仅在收到 download-request 后才流式发送
+web/lib/receiver.js      下载者侧：只接受自己请求过的 streamId，落盘、校验、等待显式保存
+web/lib/relay-channel.js 把"定向转发通道"适配成传输核心需要的 Channel
+web/lib/relay-client.js  WebSocket 客户端：hello/sessions/relay/bind + 二进制分发
+web/lib/store-memory.js / idb-store.js  接收集（浏览器本地，断点续传用）
+web/lib/zip.js           文件夹打包（store 模式，下载时才执行）
+web/lib/files.js         浏览器 File/拖放 → 数据源
+tests/                   Rust 集成与架构测试
+tests/js/                Node 单元与协议回环测试
+scripts/                 test-all.sh / smoke.sh / e2e-browser.mjs
+```
+
+## 6. 测试策略
+
+| 层 | 覆盖 |
 |---|---|
-| 大文件在浏览器内存里组装成 Blob 可能吃内存 | 分块落 IndexedDB，组装时才拼接；文件夹用 store ZIP 落盘；提供分片下载兜底（>4 GiB 时逐个文件下载） |
-| mDNS 候选解析失败导致 P2P 连不通 | 提供 `--ice-server`，README 说明；连接失败给出明确提示 |
-| 断点数据长期占用磁盘 | 接收区显示占用，提供"清空接收区"；完成项可一键清理 |
-| 发送方改文件导致校验失败 | 传输中二次哈希检出并报错；接收端丢弃并允许重传 |
-| 非安全上下文缺少 WebCrypto | 自实现 SHA-256 并对照测试 |
+| Rust 单元 | 会话表、限流、协议解析、资源 MIME/ETag、地址探测、配置校验 |
+| Rust 集成 | 静态页面与 API；WS：hello 门禁、`sessions` 拉取、定向转发、二进制转发、未绑定报错、目标离线报错、限额、断开清理 |
+| Rust 架构 | ① 源码禁止落盘调用；② 服务器协议层不得出现文件元数据概念（名称/大小/哈希/分块）；③ 只允许读路由 |
+| Rust 不变量 | **空闲连接收不到任何消息**；新会话加入不会向其他人推送任何东西（不广播） |
+| JS 单元 | SHA-256（对照 node:crypto）、分帧（含 streamId）、负载协议、登记项与 shareId、分块/续传算术、窗口流控、ZIP（python3 交叉校验）、IndexedDB 键 |
+| JS 协议回环 | 记录区拉取；**未请求前零字节**；点击后完整传输；断线续传；篡改检出与重传；并发多流按 streamId 分发；校验通过前不产生"保存"动作 |
+| 浏览器 e2e | 两个真实标签页：A 登记 → B 刷新看到记录区 → 确认未点击前服务器没有转发任何数据 → B 点击下载 → 校验通过 → 显式保存后数据落地；文件夹 + ZIP |
+
+## 7. 迭代计划（每次提交含测试）
+
+| 序 | 提交 | 内容 |
+|---|---|---|
+| 0 | `docs: 记录区模型设计` | 本文档（模型、协议、否定项、测试策略） |
+| 1 | `feat(server): 定向转发（无广播、无记录）` | 会话表、sessions/relay/bind、二进制转发、限额与不变量测试 |
+| 2 | `feat(web): 负载协议与登记项` | framing v2（streamId）、protocol、share-index、relay-client + 单测 |
+| 3 | `feat(web): 按需传输` | relay-channel、sender/receiver 门禁（未请求不发送/不接收）、回环测试 |
+| 4 | `feat(web): 记录区界面` | 记录区列表、下载/保存按钮、进度、打包下载 |
+| 5 | `test(e2e): 记录区模型端到端` | 两个标签页：拉取 → 点击 → 传输 → 校验 → 显式保存 |
+| 6 | `docs: README 与验证矩阵` | 使用说明、边界、测试证据 |
+
+## 8. 已知边界
+
+- 分享者的浏览器必须在线（记录区条目的"位置"指向它的本地文件）；分享者关掉页面，条目消失。
+- 同一连接同一时刻只保留**一条外出流**（服务器二进制转发按连接绑定目标），多条下载请求会排队。
+- 服务器不鉴权：任何能访问该端口的人都可收发；仅限可信局域网。
+- 接收到的数据存放在**下载者浏览器**的 IndexedDB，验证通过后由用户显式保存。
+- ZIP 上限 4 GiB（ZIP32），超出时降级为逐文件下载。
