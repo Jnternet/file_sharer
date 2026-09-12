@@ -1,0 +1,27 @@
+[package]
+name = "file_sharer"
+version = "0.1.0"
+edition = "2024"
+description = "局域网实时文件/文件夹直传工具：单文件产物 + 网页访问 + P2P 不落地 + 断点续传 + 自动 SHA-256 校验"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+include_dir = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1
