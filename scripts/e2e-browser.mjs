@@ -464,6 +464,38 @@ async function main() {
       `浏览器内打包 ZIP 成功（${zip.size} 字节，条目 ${zip.names.length} 个，python3 解压校验通过）`,
   );
 
+  // ---------------------------------------------------------------- 清空接收区
+  await evaluate(client, tabB, `(document.getElementById('clear-received').click(), true)`);
+  await waitFor('接收区清空（IndexedDB 断点数据一并删除）', () =>
+    evaluate(
+      client,
+      tabB,
+      `(async () => {
+        const open = indexedDB.open('file-sharer', 1);
+        const db = await new Promise((resolve, reject) => {
+          open.onsuccess = () => resolve(open.result);
+          open.onerror = () => reject(open.error);
+        });
+        const get = (store, mode) =>
+          new Promise((resolve, reject) => {
+            const request =
+              mode === 'count'
+                ? db.transaction(store).objectStore(store).count()
+                : db.transaction(store).objectStore(store).getAll();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+        const [transfers, chunks, rows] = await Promise.all([
+          get('transfers'),
+          get('chunks', 'count'),
+          Promise.resolve(document.querySelectorAll('#transfers .transfer').length),
+        ]);
+        return transfers.length === 0 && chunks === 0 && rows === 0;
+      })()`,
+    ),
+  );
+  log('清空接收区通过：界面清空，IndexedDB 中的传输元数据与数据块均已删除');
+
   client.close();
   cleanup();
 }
