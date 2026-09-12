@@ -35,13 +35,13 @@ async fn run(config: Config) -> anyhow::Result<()> {
     // 启动前先确认内嵌资源完整（单产物自检）
     let _ = assets::index_html();
 
-    let state = AppState::new(config.max_peers, config.ice_servers.clone());
+    let state = AppState::new(config.max_sessions);
     let listener = TcpListener::bind((config.bind, config.port))
         .await
         .with_context(|| format!("无法监听 {}:{}", config.bind, config.port))?;
     let addr = listener.local_addr()?;
 
-    println!("{APP_NAME} {VERSION} 已启动（服务器零存储：每次启动都是空桶）");
+    println!("{APP_NAME} {VERSION} 已启动（服务器只做定向转发：不记录、不留存）");
     for url in net::advertised_urls(config.bind, addr.port(), net::lan_ip()) {
         if url.contains("127.0.0.1") || url.contains("[::1]") {
             println!("  本机:   {url}");
@@ -49,7 +49,7 @@ async fn run(config: Config) -> anyhow::Result<()> {
             println!("  局域网: {url}");
         }
     }
-    println!("  在线人数上限: {}（Ctrl+C 退出）", config.max_peers);
+    println!("  在线会话上限: {}（Ctrl+C 退出）", config.max_sessions);
 
     info!(%addr, "server listening");
 

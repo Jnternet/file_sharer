@@ -9,7 +9,7 @@ use tower::ServiceExt;
 use file_sharer::{AppState, VERSION, build_router};
 
 fn app() -> Router {
-    build_router(AppState::new(16, vec!["stun:example.org:3478".into()]))
+    build_router(AppState::new(16))
 }
 
 async fn request(
@@ -86,26 +86,31 @@ async fn info_endpoint_reports_empty_bucket_and_no_persistence() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["name"], "file_sharer");
     assert_eq!(json["version"], VERSION);
-    assert_eq!(json["peers"], 0, "刚启动时没有任何在线用户（空桶）");
+    assert_eq!(json["sessions"], 0, "刚启动时没有任何在线会话（空桶）");
     assert_eq!(json["persistence"], "none", "服务器端零持久化");
-    assert_eq!(json["ice_servers"][0], "stun:example.org:3478");
+    assert_eq!(
+        json["records"], "none",
+        "服务器不保存文件内容，也不保存文件清单"
+    );
+    assert_eq!(json["max_sessions"], 16);
 }
 
 #[tokio::test]
 async fn info_endpoint_reflects_live_peer_count() {
-    let state = AppState::new(16, vec![]);
-    let registry = state.registry();
+    let state = AppState::new(16);
+    let registry = state.sessions();
     let app = build_router(state);
 
-    let (joined, _) = registry.join(Some("Alice")).unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let joined = registry.join(Some("Alice"), tx).unwrap();
     let (_, _, body) = request(&app, "GET", "/api/info", &[]).await;
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["peers"], 1);
+    assert_eq!(json["sessions"], 1);
 
     registry.leave(&joined.id);
     let (_, _, body) = request(&app, "GET", "/api/info", &[]).await;
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["peers"], 0, "用户离开后名单清空");
+    assert_eq!(json["sessions"], 0, "会话离开后表清空");
 }
 
 #[tokio::test]

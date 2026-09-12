@@ -1,7 +1,11 @@
-//! WebSocket 信令的 axum 粘合层。
+//! WebSocket 转发层。
 //!
-//! 服务器在这里只做两件事：维护在线名单、把 SDP/ICE 消息透明转发给目标 peer。
-//! 文件字节永远不会出现在这条链路上（需求 R4）。
+//! 服务器的全部行为：
+//!   * 回应 `hello` / `sessions`（拉取，不推送）
+//!   * 按 `to` 定向转发文本负载
+//!   * 把绑定目标之后收到的二进制帧原样转发
+//!
+//! 它不解析负载里的内容，不保存任何东西，也不会主动给谁发消息（不广播）。
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -9,38 +13,41 @@ use std::time::{Duration, Instant};
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
+use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::AppState;
-use crate::signal::{ClientMessage, Hub, MAX_SIGNAL_BYTES, ServerMessage, parse_client_message};
+use crate::signal::{
+    ClientMessage, MAX_BINARY_BYTES, MAX_TEXT_BYTES, OutMessage, Registry, RouteError,
+    ServerMessage, parse_client_message,
+};
 
-/// 等待客户端第一条 hello 的时间上限。
+/// 等待客户端第一条 `hello` 的时间上限。
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-/// 帧硬上限：超过这个长度由协议层直接断开，避免内存被撑爆。
-const HARD_FRAME_LIMIT: usize = MAX_SIGNAL_BYTES * 2;
+/// 帧硬上限：超过后由协议层断开（我们的上限更高一层，用于回可读错误）。
+const HARD_FRAME_LIMIT: usize = MAX_BINARY_BYTES + 4096;
 
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    let hub = state.hub.clone();
+    let registry = state.registry.clone();
     ws.max_message_size(HARD_FRAME_LIMIT)
-        .on_upgrade(move |socket| handle_socket(socket, hub))
+        .on_upgrade(move |socket| handle_socket(socket, registry))
 }
 
-pub async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
+pub async fn handle_socket(socket: WebSocket, registry: Arc<Registry>) {
     let (mut sender, mut receiver) = socket.split();
-    let mut limiter = hub.limiter();
+    let mut limiter = crate::signal::RateLimiter::new(state_rate(&registry));
 
-    // ---- 第一阶段：必须先用 hello 加入名单 ----
-    let first = tokio::time::timeout(HELLO_TIMEOUT, receiver.next()).await;
-    let name = match first {
+    // ---- 第一阶段：hello 门禁（服务器不主动打招呼） ----
+    let name = match tokio::time::timeout(HELLO_TIMEOUT, receiver.next()).await {
         Ok(Some(Ok(Message::Text(text)))) => {
             if !limiter.check(Instant::now()) {
-                fail(&mut sender, "rate-limited", "信令发送过于频繁").await;
+                fail(&mut sender, "rate-limited", "消息过于频繁").await;
                 return;
             }
-            if text.len() > MAX_SIGNAL_BYTES {
-                fail(&mut sender, "too-large", "信令消息超过 64 KiB").await;
+            if text.len() > MAX_TEXT_BYTES {
+                fail(&mut sender, "too-large", "文本消息超过上限").await;
                 return;
             }
             match parse_client_message(text.as_str()) {
@@ -75,62 +82,76 @@ pub async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
         }
     };
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<ServerMessage>();
-    let (me, others) = match hub.join(name.as_deref(), tx) {
-        Ok(joined) => joined,
+    let (tx, mut rx) = mpsc::unbounded_channel::<OutMessage>();
+    let me = match registry.join(name.as_deref(), tx) {
+        Ok(info) => info,
         Err(err) => {
             warn!(%err, "拒绝连接：{err}");
             fail(&mut sender, "server-full", err.to_string()).await;
             return;
         }
     };
-    info!(peer = %me.id, name = %me.name, peers = hub.count(), "peer joined");
 
-    let welcome = hub.welcome(me.clone(), others);
-    if send_json(&mut sender, &welcome).await.is_err() {
-        hub.leave(&me.id);
+    // 只回给对方自己的会话信息：不附带名单，也不通知任何人（不广播）
+    if send_json(&mut sender, &ServerMessage::Welcome { me: me.clone() })
+        .await
+        .is_err()
+    {
+        registry.leave(&me.id);
         return;
     }
-    hub.broadcast_peers();
 
-    // ---- 第二阶段：转发信令，直到断开 ----
+    // ---- 第二阶段：请求-应答 + 定向转发 ----
     loop {
         tokio::select! {
             incoming = receiver.next() => {
                 match incoming {
                     None | Some(Ok(Message::Close(_))) => break,
                     Some(Err(err)) => {
-                        debug!(peer = %me.id, %err, "读取出错，断开连接");
+                        debug!(session = %me.id, %err, "读取出错，断开连接");
                         break;
                     }
                     Some(Ok(Message::Text(text))) => {
                         if !limiter.check(Instant::now()) {
-                            fail(&mut sender, "rate-limited", "信令发送过于频繁").await;
+                            fail(&mut sender, "rate-limited", "消息过于频繁").await;
                             break;
                         }
-                        if text.len() > MAX_SIGNAL_BYTES {
-                            fail(&mut sender, "too-large", "信令消息超过 64 KiB").await;
+                        if text.len() > MAX_TEXT_BYTES {
+                            fail(&mut sender, "too-large", "文本消息超过上限").await;
                             break;
                         }
                         match parse_client_message(text.as_str()) {
-                            Ok(ClientMessage::Signal { to, data }) => {
-                                if to == me.id {
-                                    let _ = send_json(&mut sender, &ServerMessage::error(
-                                        "invalid-target",
-                                        "不能给自己发信令",
-                                    )).await;
-                                } else if !hub.send_to(&to, ServerMessage::Signal { from: me.id.clone(), data }) {
-                                    let _ = send_json(&mut sender, &ServerMessage::error(
-                                        "unknown-peer",
-                                        format!("目标 {to} 不在线"),
-                                    )).await;
+                            Ok(ClientMessage::Hello { .. }) => {
+                                let _ = send_json(&mut sender, &ServerMessage::error(
+                                    "already-joined",
+                                    "本连接已经建立会话",
+                                )).await;
+                            }
+                            Ok(ClientMessage::Sessions) => {
+                                let _ = send_json(&mut sender, &ServerMessage::Sessions {
+                                    sessions: registry.list_except(&me.id),
+                                }).await;
+                            }
+                            Ok(ClientMessage::Relay { to, payload }) => {
+                                // 定向转发：只给目标，且不回显给发送方
+                                if let Err(err) = registry.send_to(
+                                    &to,
+                                    ServerMessage::Relay { from: me.id.clone(), payload },
+                                ) {
+                                    let _ = send_json(&mut sender, &route_error(err, &to)).await;
                                 }
                             }
-                            Ok(ClientMessage::List) => {
-                                let _ = send_json(&mut sender, &ServerMessage::Peers { peers: hub.peers() }).await;
+                            Ok(ClientMessage::Bind { to }) => {
+                                match registry.bind(&me.id, &to) {
+                                    Ok(()) => {
+                                        let _ = send_json(&mut sender, &ServerMessage::Bound { to }).await;
+                                    }
+                                    Err(err) => {
+                                        let _ = send_json(&mut sender, &route_error(err, &to)).await;
+                                    }
+                                }
                             }
-                            // 重复 hello 不改变身份，忽略即可
-                            Ok(ClientMessage::Hello { .. }) => {}
+                            Ok(ClientMessage::Unbind) => registry.unbind(&me.id),
                             Err(err) => {
                                 let _ = send_json(&mut sender, &ServerMessage::error(
                                     "bad-request",
@@ -139,9 +160,23 @@ pub async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
                             }
                         }
                     }
-                    Some(Ok(Message::Binary(_))) => {
-                        fail(&mut sender, "unexpected-binary", "信令通道不接受二进制帧").await;
-                        break;
+                    Some(Ok(Message::Binary(bytes))) => {
+                        if bytes.len() > MAX_BINARY_BYTES {
+                            fail(&mut sender, "too-large", "二进制帧超过上限").await;
+                            break;
+                        }
+                        match registry.forward_binary(&me.id, bytes.to_vec()) {
+                            Ok(_) => {}
+                            Err(RouteError::Unbound) => {
+                                let _ = send_json(&mut sender, &ServerMessage::error(
+                                    "unbound",
+                                    "发送二进制帧前请先 bind 目标",
+                                )).await;
+                            }
+                            Err(err) => {
+                                let _ = send_json(&mut sender, &route_error(err, "")).await;
+                            }
+                        }
                     }
                     // ping/pong 由底层自动处理
                     Some(Ok(_)) => {}
@@ -149,8 +184,13 @@ pub async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
             }
             outbound = rx.recv() => {
                 match outbound {
-                    Some(message) => {
+                    Some(OutMessage::Json(message)) => {
                         if send_json(&mut sender, &message).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(OutMessage::Bytes(bytes)) => {
+                        if sender.send(Message::Binary(bytes.into())).await.is_err() {
                             break;
                         }
                     }
@@ -160,13 +200,30 @@ pub async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
         }
     }
 
-    let remaining = hub.leave(&me.id);
-    info!(peer = %me.id, peers = remaining.len(), "peer left");
-    hub.broadcast_peers();
+    // 离开时同样不广播（不通知任何人）
+    registry.leave(&me.id);
+}
+
+fn state_rate(registry: &Arc<Registry>) -> crate::signal::RateLimit {
+    registry.rate_limit()
+}
+
+fn route_error(err: RouteError, to: &str) -> ServerMessage {
+    let code = match err {
+        RouteError::UnknownSession => "unknown-session",
+        RouteError::Unbound => "unbound",
+        RouteError::Closed => "target-closed",
+    };
+    let message = if to.is_empty() {
+        err.to_string()
+    } else {
+        format!("{to}：{err}")
+    };
+    ServerMessage::error(code, message)
 }
 
 async fn send_json(
-    sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    sender: &mut SplitSink<WebSocket, Message>,
     message: &ServerMessage,
 ) -> Result<(), axum::Error> {
     let text = serde_json::to_string(message).unwrap_or_else(|_| {
@@ -175,9 +232,8 @@ async fn send_json(
     sender.send(Message::Text(text.into())).await
 }
 
-/// 发送错误后优雅关闭（客户端能收到错误码再断开）。
 async fn fail(
-    sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    sender: &mut SplitSink<WebSocket, Message>,
     code: &'static str,
     message: impl Into<String>,
 ) {

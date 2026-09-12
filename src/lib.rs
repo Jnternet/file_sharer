@@ -1,4 +1,6 @@
-//! 服务器装配：内嵌静态站点 + JSON API + WebSocket 信令（HTTP 部分可被测试直接调用）。
+//! 服务器装配：内嵌静态站点 + JSON API + WebSocket 定向转发。
+//!
+//! 服务器不记录文件、不留存数据：内存里只有"谁在线"和"这条连接往哪转发"。
 
 pub mod assets;
 pub mod config;
@@ -18,36 +20,35 @@ use axum::{Json, Router as AxumRouter};
 use serde::Serialize;
 
 use assets::Asset;
-use signal::{Hub, PeerRegistry, RateLimit};
+use signal::{RateLimit, Registry};
 
 pub const APP_NAME: &str = "file_sharer";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone)]
 pub struct AppState {
-    pub hub: Arc<Hub>,
+    pub registry: Arc<Registry>,
     pub started: Arc<Instant>,
 }
 
 impl AppState {
-    pub fn new(max_peers: usize, ice_servers: Vec<String>) -> Self {
-        Self::with_rate_limit(max_peers, ice_servers, RateLimit::default())
+    pub fn new(max_sessions: usize) -> Self {
+        Self::with_rate_limit(max_sessions, RateLimit::default())
     }
 
-    pub fn with_rate_limit(max_peers: usize, ice_servers: Vec<String>, rate: RateLimit) -> Self {
+    pub fn with_rate_limit(max_sessions: usize, rate: RateLimit) -> Self {
         Self {
-            hub: Arc::new(Hub::new(max_peers, rate, ice_servers)),
+            registry: Arc::new(Registry::with_rate_limit(max_sessions, rate)),
             started: Arc::new(Instant::now()),
         }
     }
 
-    pub fn registry(&self) -> Arc<PeerRegistry> {
-        self.hub.registry().clone()
+    pub fn sessions(&self) -> Arc<Registry> {
+        self.registry.clone()
     }
 
-    pub fn max_peers(&self) -> usize {
-        // 注册表内部会把 0 收敛为 1，这里对外暴露同样的语义
-        self.hub.max_peers()
+    pub fn max_sessions(&self) -> usize {
+        self.registry.max_sessions()
     }
 }
 
@@ -55,12 +56,13 @@ impl AppState {
 struct InfoResponse {
     name: &'static str,
     version: &'static str,
-    peers: usize,
-    max_peers: usize,
+    sessions: usize,
+    max_sessions: usize,
     uptime_ms: u64,
-    /// 明确告知客户端：服务器端没有任何持久化（每次启动都是空桶）
+    /// 不落盘：每次启动都是空桶
     persistence: &'static str,
-    ice_servers: Vec<String>,
+    /// 不保存文件内容，也不保存文件清单
+    records: &'static str,
 }
 
 #[derive(Serialize)]
@@ -91,11 +93,11 @@ async fn info(State(state): State<AppState>) -> impl IntoResponse {
     Json(InfoResponse {
         name: APP_NAME,
         version: VERSION,
-        peers: state.hub.count(),
-        max_peers: state.max_peers(),
+        sessions: state.registry.count(),
+        max_sessions: state.max_sessions(),
         uptime_ms: state.started.elapsed().as_millis() as u64,
         persistence: "none",
-        ice_servers: state.hub.ice_servers().to_vec(),
+        records: "none",
     })
 }
 
@@ -146,9 +148,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn state_starts_with_no_peers() {
-        let state = AppState::new(4, vec![]);
-        assert_eq!(state.registry().count(), 0);
-        assert_eq!(state.max_peers(), 4);
+    fn state_starts_with_no_sessions() {
+        let state = AppState::new(4);
+        assert_eq!(state.registry.count(), 0);
+        assert_eq!(state.max_sessions(), 4);
+        assert_eq!(state.sessions().list().len(), 0);
     }
 }

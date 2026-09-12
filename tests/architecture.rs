@@ -74,6 +74,50 @@ fn server_only_exposes_read_routes() {
 }
 
 #[test]
+fn server_knows_nothing_about_files() {
+    // 需求：服务器不记录、不留存。协议层不得出现任何文件概念。
+    const BANNED: &[&str] = &[
+        "sha256",
+        "manifest",
+        "fileindex",
+        "chunk",
+        "filename",
+        "filesize",
+        "share",
+        "transfer",
+        "path",
+    ];
+    // 只看协议/转发层：这里不应出现任何文件语义
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for name in ["signal.rs", "ws.rs"] {
+        let text = production_part(&fs::read_to_string(root.join(name)).unwrap()).to_lowercase();
+        for pattern in BANNED {
+            assert!(
+                !text.contains(pattern),
+                "src/{name} 出现了文件相关概念 `{pattern}`：服务器只转发，不记录文件"
+            );
+        }
+    }
+}
+
+#[test]
+fn server_never_broadcasts() {
+    // 需求：不广播。服务器代码里不应存在任何"广播/群发"的实现。
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for entry in fs::read_dir(&root).unwrap() {
+        let path = entry.unwrap().path();
+        let text = production_part(&fs::read_to_string(&path).unwrap()).to_lowercase();
+        for pattern in ["broadcast", "for_each_session", "send_all", "fan_out"] {
+            assert!(
+                !text.contains(pattern),
+                "{} 中出现了广播语义 `{pattern}`：本项目不广播",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn frontend_assets_are_embedded_for_single_artifact_build() {
     let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/assets.rs");
     let text = fs::read_to_string(&assets).unwrap();
