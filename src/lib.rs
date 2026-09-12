@@ -108,9 +108,7 @@ async fn serve_static_or_404(OriginalUri(uri): OriginalUri, headers: HeaderMap) 
     if url_path.starts_with("/api/") || url_path == "/ws" {
         return (
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "not_found",
-            }),
+            Json(ErrorResponse { error: "not_found" }),
         )
             .into_response();
     }
@@ -128,11 +126,7 @@ fn respond_with(headers: HeaderMap, asset: &Asset, cache_control: &str) -> Respo
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
     if inm.split(',').any(|candidate| candidate.trim() == etag) {
-        return (
-            StatusCode::NOT_MODIFIED,
-            [(header::ETAG, etag)],
-        )
-            .into_response();
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
     }
     (
         StatusCode::OK,

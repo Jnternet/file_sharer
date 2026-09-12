@@ -57,7 +57,14 @@ fn server_never_writes_to_disk() {
 fn server_only_exposes_read_routes() {
     let lib = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
     let text = fs::read_to_string(&lib).unwrap();
-    for banned in ["post(", "put(", "patch(", "delete(", "Multipart", "BodyLimit"] {
+    for banned in [
+        "post(",
+        "put(",
+        "patch(",
+        "delete(",
+        "Multipart",
+        "BodyLimit",
+    ] {
         assert!(
             !text.contains(banned),
             "src/lib.rs 不应包含写路由/请求体处理 `{banned}`：文件字节必须走 P2P"
@@ -75,7 +82,9 @@ fn frontend_assets_are_embedded_for_single_artifact_build() {
         "前端必须编译期内嵌，才能保证单产物"
     );
     assert!(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("web/index.html").exists(),
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("web/index.html")
+            .exists(),
         "web/index.html 必须存在"
     );
 }

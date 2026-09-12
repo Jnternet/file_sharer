@@ -4,8 +4,8 @@
 //! 进程退出即清空 —— 也就是"每次启动后都是一个空桶"（需求 R3）。
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,10 @@ impl PeerRegistry {
     }
 
     /// 注册一个 peer，返回（自己，除自己外的在线名单）。
-    pub fn join(&self, requested_name: Option<&str>) -> Result<(PeerInfo, Vec<PeerInfo>), JoinError> {
+    pub fn join(
+        &self,
+        requested_name: Option<&str>,
+    ) -> Result<(PeerInfo, Vec<PeerInfo>), JoinError> {
         let mut peers = self.peers.lock().unwrap_or_else(|e| e.into_inner());
         if peers.len() >= self.max_peers {
             return Err(JoinError::Full);
@@ -134,10 +137,7 @@ pub enum ClientMessage {
     /// 注册显示名并进入在线名单（必须是第一条消息）
     Hello { name: Option<String> },
     /// 透明转发给指定 peer（SDP / ICE 等），服务器不解析 data
-    Signal {
-        to: String,
-        data: serde_json::Value,
-    },
+    Signal { to: String, data: serde_json::Value },
     /// 请求当前在线名单
     List,
 }
@@ -447,8 +447,7 @@ mod tests {
     #[test]
     fn rate_limiter_resets_after_window() {
         let t0 = Instant::now();
-        let mut limiter =
-            RateLimiter::starting_at(RateLimit::new(2, Duration::from_secs(10)), t0);
+        let mut limiter = RateLimiter::starting_at(RateLimit::new(2, Duration::from_secs(10)), t0);
         assert!(limiter.check(t0));
         assert!(limiter.check(t0));
         assert!(!limiter.check(t0), "窗口内超过容量必须被拒绝");
@@ -528,7 +527,11 @@ mod tests {
 
     #[test]
     fn welcome_carries_self_peers_and_ice_config() {
-        let hub = Hub::new(4, RateLimit::default(), vec!["stun:example.org:3478".into()]);
+        let hub = Hub::new(
+            4,
+            RateLimit::default(),
+            vec!["stun:example.org:3478".into()],
+        );
         let (tx, _rx) = mpsc::unbounded_channel();
         let (me, others) = hub.join(Some("Alice"), tx).unwrap();
         let msg = hub.welcome(me.clone(), others);
@@ -591,7 +594,10 @@ mod tests {
         let remaining = hub.leave(&a.id);
         assert_eq!(remaining, vec![b.clone()]);
         assert_eq!(hub.count(), 1);
-        assert!(!hub.send_to(&a.id, ServerMessage::error("x", "y")), "离开后不再可投递");
+        assert!(
+            !hub.send_to(&a.id, ServerMessage::error("x", "y")),
+            "离开后不再可投递"
+        );
     }
 
     #[test]

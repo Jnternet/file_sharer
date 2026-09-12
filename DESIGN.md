@@ -185,7 +185,8 @@ transferId = sha256( sortedFiles.map(f => `${f.path}\n${f.size}\n${f.sha256}`).j
 | 架构 | `cargo test` | 无落盘调用；无上传路由；内嵌资源存在 index.html |
 | JS 单元 | `node --test`（零依赖） | SHA-256 对照向量/分块等价/大输入、分帧编解码与畸形输入、协议消息校验、传输计划与自动区分、续传偏移、流控窗口、CRC32/ZIP 结构 |
 | JS 协议回环 | `node --test` | sender-core ↔ receiver-core 用内存管道对接：正常传输、断线续传、篡改数据必被检出、块乱序/重复幂等、文件夹打包 |
-| 冒烟 | `scripts/smoke.sh` + 浏览器 | 构建产物单文件启动 → `curl` 校验页面/API/WS →（可选）两个浏览器标签页真实传输 |
+| 冒烟 | `scripts/smoke.sh` | 构建产物单独放进空目录启动 → `curl` 校验页面/API/404/405 |
+| 浏览器 e2e | `scripts/e2e-browser.mjs`（无头 Firefox + WebDriver BiDi） | 两个真实标签页建立 WebRTC 直连 → 真实 File 拖放 → 接收端 IndexedDB 逐字节比对 → 文件夹 ZIP 打包并由 python3 解压校验 |
 
 ## 8. 迭代计划（每次提交 = 一个小步，含测试）
 
@@ -201,6 +202,8 @@ transferId = sha256( sortedFiles.map(f => `${f.path}\n${f.size}\n${f.sha256}`).j
 | 8 | `feat(web): ZIP 打包与下载` | zip.js | Node 单测（结构可解析） |
 | 9 | `feat(web): 浏览器 UI 与 WebRTC 粘合层` | index.html/styles.css/app.js | 冒烟脚本 + 手工/浏览器验证 |
 | 10 | `docs: 使用说明与安全边界` + 收尾 | README/scripts | 全量测试 + 构建产物冒烟 |
+| 11 | `fix: 端到端验证发现的三处缺陷` | 名单含自己、answer 触发重建、IndexedDB 游标长事务 | 浏览器 e2e 复现 → 修复 → 回归测试 |
+| 12 | `test(e2e): 真实浏览器端到端` | 单文件 + 文件夹 + ZIP（python3 独立解压校验） | `scripts/e2e-browser.mjs` 全绿 |
 
 ## 9. 已知风险与对策
 

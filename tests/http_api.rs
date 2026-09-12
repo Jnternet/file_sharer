@@ -29,7 +29,13 @@ async fn request(
         .unwrap();
     let status = response.status();
     let headers = response.headers().clone();
-    let body = response.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
     (status, headers, body)
 }
 
@@ -153,7 +159,10 @@ async fn path_traversal_is_blocked() {
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri} 必须 404");
         let text = String::from_utf8_lossy(&body);
         assert!(!text.contains("[package]"), "{uri} 泄漏了源码");
-        assert!(!text.contains("repositoryformatversion"), "{uri} 泄漏了 .git");
+        assert!(
+            !text.contains("repositoryformatversion"),
+            "{uri} 泄漏了 .git"
+        );
     }
 }
 

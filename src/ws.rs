@@ -57,7 +57,12 @@ pub async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
         }
         Ok(Some(Ok(Message::Close(_)))) | Ok(None) => return,
         Ok(Some(Ok(_))) => {
-            fail(&mut sender, "hello-required", "第一条消息必须是 hello 文本帧").await;
+            fail(
+                &mut sender,
+                "hello-required",
+                "第一条消息必须是 hello 文本帧",
+            )
+            .await;
             return;
         }
         Ok(Some(Err(err))) => {

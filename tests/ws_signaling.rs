@@ -25,7 +25,6 @@ async fn spawn(max_peers: usize, rate: RateLimit) -> SocketAddr {
         let _ = axum::serve(listener, app).await;
     });
     addr
-
 }
 
 async fn spawn_default() -> SocketAddr {
@@ -33,7 +32,9 @@ async fn spawn_default() -> SocketAddr {
 }
 
 async fn connect(addr: SocketAddr) -> Ws {
-    let (ws, _) = connect_async(format!("ws://{addr}/ws")).await.expect("WS 握手失败");
+    let (ws, _) = connect_async(format!("ws://{addr}/ws"))
+        .await
+        .expect("WS 握手失败");
     ws
 }
 
@@ -114,7 +115,10 @@ async fn next_peers_of_len(ws: &mut Ws, len: usize) -> Value {
 /// 等待连接被服务端关闭，返回关闭原因（可能为空）。
 async fn expect_close(ws: &mut Ws) -> Option<String> {
     for _ in 0..20 {
-        match tokio::time::timeout(WAIT, ws.next()).await.expect("等待关闭超时") {
+        match tokio::time::timeout(WAIT, ws.next())
+            .await
+            .expect("等待关闭超时")
+        {
             Some(Ok(Message::Close(frame))) => return frame.map(|f| f.reason.to_string()),
             Some(Ok(_)) => continue,
             Some(Err(_)) | None => return None,
@@ -130,7 +134,11 @@ async fn welcome_carries_identity_and_ice_config() {
 
     assert_eq!(welcome["self"]["name"], "Alice");
     assert!(welcome["self"]["id"].as_str().unwrap().starts_with('p'));
-    assert_eq!(welcome["peers"].as_array().unwrap().len(), 0, "第一个用户看不到别人");
+    assert_eq!(
+        welcome["peers"].as_array().unwrap().len(),
+        0,
+        "第一个用户看不到别人"
+    );
     assert_eq!(welcome["ice_servers"][0], "stun:example.org:3478");
     assert_eq!(welcome["max_peers"], 16);
 }
@@ -145,14 +153,22 @@ async fn joining_peer_is_broadcast_to_everyone() {
     let peers_a = next_of_type(&mut a, "peers").await;
     assert_eq!(peers_a["peers"].as_array().unwrap().len(), 0);
 
-    let (mut b, b_welcome) = hello(addr, "Bob").await;
+    let (_b, b_welcome) = hello(addr, "Bob").await;
     let b_id = b_welcome["self"]["id"].as_str().unwrap().to_string();
     assert_ne!(a_id, b_id);
-    assert_eq!(b_welcome["peers"].as_array().unwrap().len(), 1, "B 应看到 A");
+    assert_eq!(
+        b_welcome["peers"].as_array().unwrap().len(),
+        1,
+        "B 应看到 A"
+    );
     assert_eq!(b_welcome["peers"][0]["id"], a_id);
 
     let peers_a = next_of_type(&mut a, "peers").await;
-    assert_eq!(peers_a["peers"].as_array().unwrap().len(), 1, "A 的名单里只有 B");
+    assert_eq!(
+        peers_a["peers"].as_array().unwrap().len(),
+        1,
+        "A 的名单里只有 B"
+    );
     assert_eq!(peers_a["peers"][0]["id"], b_id);
 }
 
@@ -160,7 +176,11 @@ async fn joining_peer_is_broadcast_to_everyone() {
 async fn peer_list_never_contains_yourself() {
     let addr = spawn_default().await;
     let (mut a, a_welcome) = hello(addr, "Alice").await;
-    assert_eq!(a_welcome["peers"].as_array().unwrap().len(), 0, "welcome 里不含自己");
+    assert_eq!(
+        a_welcome["peers"].as_array().unwrap().len(),
+        0,
+        "welcome 里不含自己"
+    );
     let a_id = a_welcome["self"]["id"].as_str().unwrap().to_string();
 
     let (mut b, b_welcome) = hello(addr, "Bob").await;
@@ -232,7 +252,11 @@ async fn bad_json_is_reported_but_connection_survives() {
 
     send_json(&mut a, json!({"t": "list"})).await;
     let peers = next_of_type(&mut a, "peers").await;
-    assert_eq!(peers["peers"].as_array().unwrap().len(), 1, "连接应当仍然可用");
+    assert_eq!(
+        peers["peers"].as_array().unwrap().len(),
+        1,
+        "连接应当仍然可用"
+    );
 }
 
 #[tokio::test]
@@ -313,7 +337,11 @@ async fn disconnect_removes_peer_from_directory() {
     drop(b);
 
     let peers = next_peers_of_len(&mut a, 0).await;
-    assert_eq!(peers["peers"].as_array().unwrap().len(), 0, "B 断开后 A 的名单为空");
+    assert_eq!(
+        peers["peers"].as_array().unwrap().len(),
+        0,
+        "B 断开后 A 的名单为空"
+    );
 
     // 新用户进来时也不应看到已离开的 B
     let (_c, c_welcome) = hello(addr, "Carol").await;
@@ -323,7 +351,11 @@ async fn disconnect_removes_peer_from_directory() {
         .iter()
         .map(|p| p["id"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(ids, vec![a_id], "新用户应只看到 A（不含自己，也不含已离开的 B）");
+    assert_eq!(
+        ids,
+        vec![a_id],
+        "新用户应只看到 A（不含自己，也不含已离开的 B）"
+    );
 }
 
 #[tokio::test]

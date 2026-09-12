@@ -51,8 +51,15 @@ mod tests {
 
     #[test]
     fn unspecified_bind_advertises_loopback_and_lan() {
-        let urls = advertised_urls("0.0.0.0".parse().unwrap(), 8080, Some("192.168.1.7".parse().unwrap()));
-        assert_eq!(urls, vec!["http://127.0.0.1:8080/", "http://192.168.1.7:8080/"]);
+        let urls = advertised_urls(
+            "0.0.0.0".parse().unwrap(),
+            8080,
+            Some("192.168.1.7".parse().unwrap()),
+        );
+        assert_eq!(
+            urls,
+            vec!["http://127.0.0.1:8080/", "http://192.168.1.7:8080/"]
+        );
     }
 
     #[test]
@@ -63,7 +70,11 @@ mod tests {
 
     #[test]
     fn loopback_bind_is_not_advertised_as_lan() {
-        let urls = advertised_urls("127.0.0.1".parse().unwrap(), 9000, Some("10.0.0.5".parse().unwrap()));
+        let urls = advertised_urls(
+            "127.0.0.1".parse().unwrap(),
+            9000,
+            Some("10.0.0.5".parse().unwrap()),
+        );
         assert_eq!(urls, vec!["http://127.0.0.1:9000/"]);
     }
 
