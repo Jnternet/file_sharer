@@ -27,6 +27,18 @@ export class SendWindow {
     return Math.max(0, this.#limit - this.inflight);
   }
 
+  /**
+   * 断点续传基值：窗口从"已经有这么多字节在途/已确认"开始计数，
+   * 这样接收端的绝对进度 ack 依然能正确约束窗口。
+   */
+  prime(bytes) {
+    if (!Number.isInteger(bytes) || bytes < 0) {
+      throw new RangeError(`prime 需要非负整数，实际 ${bytes}`);
+    }
+    this.#sent = Math.max(this.#sent, bytes);
+    this.#acked = Math.max(this.#acked, bytes);
+  }
+
   /** 记下"已经交给数据通道"的字节。 */
   add(bytes) {
     if (!Number.isInteger(bytes) || bytes < 0) {
