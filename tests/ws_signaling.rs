@@ -141,9 +141,9 @@ async fn joining_peer_is_broadcast_to_everyone() {
     let (mut a, a_welcome) = hello(addr, "Alice").await;
     let a_id = a_welcome["self"]["id"].as_str().unwrap().to_string();
 
-    // A 自己收到过一条 peers（单人）；
+    // A 自己收到过一条 peers（名单里不含自己）
     let peers_a = next_of_type(&mut a, "peers").await;
-    assert_eq!(peers_a["peers"].as_array().unwrap().len(), 1);
+    assert_eq!(peers_a["peers"].as_array().unwrap().len(), 0);
 
     let (mut b, b_welcome) = hello(addr, "Bob").await;
     let b_id = b_welcome["self"]["id"].as_str().unwrap().to_string();
@@ -152,7 +152,35 @@ async fn joining_peer_is_broadcast_to_everyone() {
     assert_eq!(b_welcome["peers"][0]["id"], a_id);
 
     let peers_a = next_of_type(&mut a, "peers").await;
-    assert_eq!(peers_a["peers"].as_array().unwrap().len(), 2, "A 应看到两人");
+    assert_eq!(peers_a["peers"].as_array().unwrap().len(), 1, "A 的名单里只有 B");
+    assert_eq!(peers_a["peers"][0]["id"], b_id);
+}
+
+#[tokio::test]
+async fn peer_list_never_contains_yourself() {
+    let addr = spawn_default().await;
+    let (mut a, a_welcome) = hello(addr, "Alice").await;
+    assert_eq!(a_welcome["peers"].as_array().unwrap().len(), 0, "welcome 里不含自己");
+    let a_id = a_welcome["self"]["id"].as_str().unwrap().to_string();
+
+    let (mut b, b_welcome) = hello(addr, "Bob").await;
+    let b_id = b_welcome["self"]["id"].as_str().unwrap().to_string();
+    assert_eq!(b_welcome["peers"][0]["id"], a_id);
+
+    for (ws, self_id, expected) in [
+        (&mut a, a_id.clone(), b_id.clone()),
+        (&mut b, b_id.clone(), a_id.clone()),
+    ] {
+        let peers = next_peers_of_len(ws, 1).await;
+        let ids: Vec<String> = peers["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|peer| peer["id"].as_str().unwrap().to_string())
+            .collect();
+        assert!(!ids.contains(&self_id), "名单里不应出现自己");
+        assert_eq!(ids, vec![expected]);
+    }
 }
 
 #[tokio::test]
@@ -276,15 +304,16 @@ async fn server_full_is_reported() {
 #[tokio::test]
 async fn disconnect_removes_peer_from_directory() {
     let addr = spawn_default().await;
-    let (mut a, _) = hello(addr, "Alice").await;
+    let (mut a, a_welcome) = hello(addr, "Alice").await;
+    let a_id = a_welcome["self"]["id"].as_str().unwrap().to_string();
     let (mut b, _) = hello(addr, "Bob").await;
-    let _ = next_peers_of_len(&mut a, 2).await;
+    let _ = next_peers_of_len(&mut a, 1).await;
 
     b.close(None).await.unwrap();
     drop(b);
 
-    let peers = next_peers_of_len(&mut a, 1).await;
-    assert_eq!(peers["peers"].as_array().unwrap().len(), 1, "B 断开后名单应只剩 A");
+    let peers = next_peers_of_len(&mut a, 0).await;
+    assert_eq!(peers["peers"].as_array().unwrap().len(), 0, "B 断开后 A 的名单为空");
 
     // 新用户进来时也不应看到已离开的 B
     let (_c, c_welcome) = hello(addr, "Carol").await;
@@ -294,7 +323,7 @@ async fn disconnect_removes_peer_from_directory() {
         .iter()
         .map(|p| p["id"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(ids.len(), 1);
+    assert_eq!(ids, vec![a_id], "新用户应只看到 A（不含自己，也不含已离开的 B）");
 }
 
 #[tokio::test]

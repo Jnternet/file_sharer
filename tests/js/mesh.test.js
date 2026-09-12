@@ -59,6 +59,8 @@ test('双向上线：只建一条数据通道，双向可收发', async (t) => {
   const { channels, network, meshA, meshB } = await connectTwo(t);
 
   assert.equal(network.stats.dataChannels, 1, '只有小 ID 侧主叫');
+  assert.equal(network.stats.connections, 2, '每侧只建一个 PeerConnection（answer 不应触发重建）');
+  assert.equal(network.stats.answers, 1);
   assert.equal(channels.p1.length, 1);
   assert.equal(channels.p2.length, 1);
   assert.deepEqual(meshA.connectedPeers, ['p2']);

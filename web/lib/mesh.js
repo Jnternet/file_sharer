@@ -148,18 +148,21 @@ export function createPeerMesh({
       return;
     }
     if (data.sdp) {
-      const existing = links.get(from);
-      if (existing && !existing.connected) {
-        // 旧链路已经死掉：先拆掉，保证新 offer 落在新连接上
-        teardown(from);
-      }
-      const link = linkFor(from);
       if (data.sdp.type === 'offer') {
+        const existing = links.get(from);
+        if (existing && !existing.connected) {
+          // 旧链路已经死掉：先拆掉，保证新 offer 落在新连接上。
+          // 注意：只对 offer 做这件事——answer 是对"刚刚发出的 offer"的正常回复，
+          // 若此时重建连接，会得到 "Cannot set remote answer in state stable"。
+          teardown(from);
+        }
+        const link = linkFor(from);
         await link.pc.setRemoteDescription(data.sdp);
         const answer = await link.pc.createAnswer();
         await link.pc.setLocalDescription(answer);
         signaling.signal(from, { sdp: link.pc.localDescription ?? answer });
       } else {
+        const link = linkFor(from);
         await link.pc.setRemoteDescription(data.sdp);
       }
       return;

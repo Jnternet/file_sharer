@@ -86,37 +86,19 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
     },
 
     async *readChunks(transferId, fileIndex) {
-      const tx = db.transaction(CHUNKS);
-      const index = tx.objectStore(CHUNKS);
-      // 主键是 [transferId, fileIndex, chunkIndex]，天然按块序返回
-      const cursorRequest = index.openCursor(chunkRangeFor(transferId, fileIndex));
-      let resolveNext;
-      let rejectNext;
-      let pending = new Promise((resolve, reject) => {
-        resolveNext = resolve;
-        rejectNext = reject;
-      });
-      cursorRequest.onsuccess = () => {
-        const cursor = cursorRequest.result;
-        const record = cursor?.value;
-        const next = pending;
-        if (!cursor) {
-          resolveNext(null);
-          return;
-        }
-        pending = new Promise((resolve, reject) => {
-          resolveNext = resolve;
-          rejectNext = reject;
-        });
-        cursor.continue();
-        next(record);
-      };
-      cursorRequest.onerror = () => rejectNext(cursorRequest.error);
-
-      for (;;) {
-        const record = await pending;
+      // 逐块读取（每块一个事务）：块数来自元数据，顺序由 chunkIndex 决定。
+      // 不用游标是因为长事务在 await 边界上会被浏览器自动提交，进而报
+      // TransactionInactiveError / AbortError。
+      const meta = await request(
+        db.transaction(TRANSFERS).objectStore(TRANSFERS).get(transferId),
+      );
+      const chunks = meta?.files?.[fileIndex]?.chunks ?? 0;
+      for (let index = 0; index < chunks; index++) {
+        const record = await request(
+          db.transaction(CHUNKS).objectStore(CHUNKS).get(chunkKey(transferId, fileIndex, index)),
+        );
         if (!record) {
-          break;
+          throw new Error(`断点数据缺失：块 ${index}（${transferId}/${fileIndex}）`);
         }
         yield new Uint8Array(record.bytes);
       }

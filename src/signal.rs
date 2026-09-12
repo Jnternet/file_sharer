@@ -334,10 +334,18 @@ impl Hub {
         }
     }
 
+    /// 名单广播：每个接收者拿到的列表**不包含自己**（否则前端会尝试连自己）。
     pub fn broadcast_peers(&self) {
-        self.broadcast(ServerMessage::Peers {
-            peers: self.peers(),
-        });
+        let peers = self.registry.list();
+        let outboxes = self.outboxes.lock().unwrap_or_else(|e| e.into_inner());
+        for (id, tx) in outboxes.iter() {
+            let others = peers
+                .iter()
+                .filter(|peer| &peer.id != id)
+                .cloned()
+                .collect::<Vec<_>>();
+            let _ = tx.send(ServerMessage::Peers { peers: others });
+        }
     }
 
     pub fn welcome(&self, me: PeerInfo, peers: Vec<PeerInfo>) -> ServerMessage {
@@ -570,11 +578,14 @@ mod tests {
         let (b, _) = hub.join(Some("B"), tx_b).unwrap();
 
         hub.broadcast_peers();
-        for rx in [&mut rx_a, &mut rx_b] {
-            match rx.try_recv().unwrap() {
-                ServerMessage::Peers { peers } => assert_eq!(peers.len(), 2),
-                other => panic!("expected peers, got {other:?}"),
-            }
+        // 名单里不应包含接收者自己
+        match rx_a.try_recv().unwrap() {
+            ServerMessage::Peers { peers } => assert_eq!(peers, vec![b.clone()]),
+            other => panic!("expected peers, got {other:?}"),
+        }
+        match rx_b.try_recv().unwrap() {
+            ServerMessage::Peers { peers } => assert_eq!(peers, vec![a.clone()]),
+            other => panic!("expected peers, got {other:?}"),
         }
 
         let remaining = hub.leave(&a.id);

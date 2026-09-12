@@ -157,7 +157,7 @@ pub async fn handle_socket(socket: WebSocket, hub: Arc<Hub>) {
 
     let remaining = hub.leave(&me.id);
     info!(peer = %me.id, peers = remaining.len(), "peer left");
-    hub.broadcast(ServerMessage::Peers { peers: remaining });
+    hub.broadcast_peers();
 }
 
 async fn send_json(
