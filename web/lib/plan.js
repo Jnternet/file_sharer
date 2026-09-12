@@ -95,7 +95,7 @@ export function buildSelectionPlan(files) {
  * 内容寻址的传输 ID：只与"传的是什么"有关，与谁在传、什么时候传无关。
  * 因此发送方刷新页面后重新选择同一批文件，接收端仍能命中断点数据（DESIGN.md §4.4）。
  */
-export function transferIdFromHashes(files) {
+export function shareIdFromHashes(files) {
   if (!Array.isArray(files) || files.length === 0) {
     throw new PlanError('empty-selection', '没有文件无法生成传输 ID');
   }

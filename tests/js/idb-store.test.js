@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { chunkKey, chunkRangeFor, createIndexedDbStore } from '../../web/lib/idb-store.js';
 
-test('chunkKey 使用复合主键 [transferId, fileIndex, chunkIndex]', () => {
+test('chunkKey 使用复合主键 [shareId, fileIndex, chunkIndex]', () => {
   assert.deepEqual(chunkKey('abcd1234', 2, 7), ['abcd1234', 2, 7]);
 });
 

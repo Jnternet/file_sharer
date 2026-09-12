@@ -1,358 +1,288 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { Receiver } from '../../web/lib/receiver.js';
-import { Sender, hashSource } from '../../web/lib/sender.js';
-import { createMemoryStore } from '../../web/lib/store-memory.js';
-import { buildSelectionPlan, transferIdFromHashes } from '../../web/lib/plan.js';
+import { createDownloadService } from '../../web/lib/download-service.js';
 import { encodeDataFrame } from '../../web/lib/framing.js';
-import {
-  MESSAGE,
-  errorMessage,
-  manifestMessage,
-  resumeStateMessage,
-} from '../../web/lib/protocol.js';
+import { Sender } from '../../web/lib/sender.js';
+import { createShareService } from '../../web/lib/share-service.js';
+import { buildShareEntry } from '../../web/lib/share-index.js';
+import { createMemoryStore } from '../../web/lib/store-memory.js';
+import { KIND, indexRequestMessage, manifestMessage } from '../../web/lib/protocol.js';
 import {
   collectStored,
-  createBufferSource,
-  createChannelPair,
+  createRelayNetwork,
   flush,
-  hashOf,
   randomBytes,
-  withLatency,
-} from './support/harness.js';
+  sourceFactoryFor,
+  waitForEvent,
+  wireClient,
+} from './support/relay-harness.js';
 
-const CHUNK = 64; // 测试用小分块，1 MiB 的协议行为完全一致
+const CHUNK = 64; // 测试用小分块，协议行为与 1 MiB 一致
 
-function planFor(files) {
-  return buildSelectionPlan(
-    files.map((file) => ({
-      name: file.path.split('/').pop(),
-      size: file.bytes.length,
-      webkitRelativePath: file.path,
-    })),
-  );
+function fakeFile(path, bytes) {
+  return { name: path.split('/').pop(), size: bytes.length, type: 'application/octet-stream' };
 }
 
 async function setup({
   files,
-  store = createMemoryStore(),
   chunkSize = CHUNK,
   windowBytes = CHUNK * 4,
-  pairOptions = {},
-  senderOptions = {},
-  receiverOptions = {},
+  store = createMemoryStore(),
+  ownerOptions = {},
+  downloaderOptions = {},
 } = {}) {
-  const source = createBufferSource(files);
-  const pair = createChannelPair(pairOptions);
-  const plan = planFor(files);
-  const hashed = await hashSource(source, { chunkSize });
-  const events = { sender: [], receiver: [] };
-  const sender = new Sender({
-    source,
-    channel: pair.a,
+  const network = createRelayNetwork();
+  const owner = network.createClient({ name: '分享者', ...ownerOptions });
+  const downloader = network.createClient({ name: '下载者', ...downloaderOptions });
+  const third = network.createClient({ name: '旁观者' });
+  owner.connect();
+  downloader.connect();
+  third.connect();
+
+  const events = { owner: [], downloader: [], third: [] };
+  const shares = createShareService({
+    relay: owner,
+    senderName: '分享者',
+    onEvent: (event) => events.owner.push(event),
+    senderFactory: ({ source, channel }) =>
+      new Sender({
+        source,
+        channel,
+        chunkSize,
+        windowBytes,
+        resumeTimeoutMs: 1000,
+        verifyTimeoutMs: 2000,
+        onEvent: (event) => events.owner.push(event),
+      }),
+  });
+  const downloads = createDownloadService({
+    relay: downloader,
+    store,
+    ackIntervalBytes: chunkSize,
+    onEvent: (event) => events.downloader.push(event),
+  });
+
+  wireClient(owner, { shareService: shares });
+  wireClient(downloader, { downloadService: downloads });
+  wireClient(third, { onEvent: (event) => events.third.push(event) });
+
+  const filesByPath = new Map(files.map((file) => [file.path, file.bytes]));
+  const built = await buildShareEntry({
+    entries: files.map((file) => ({ file: fakeFile(file.path, file.bytes), path: file.path })),
+    sourceFactory: sourceFactoryFor(filesByPath),
     chunkSize,
-    windowBytes,
-    resumeTimeoutMs: 1000,
-    verifyTimeoutMs: 2000,
-    onEvent: (event) => events.sender.push(event),
-    ...senderOptions,
-  }).attach();
-  const receiver = new Receiver({
-    store,
-    channel: pair.b,
-    ackIntervalBytes: chunkSize * 2,
-    onEvent: (event) => events.receiver.push(event),
-    ...receiverOptions,
-  }).attach();
-  return {
-    source,
-    pair,
-    plan,
-    hashed,
-    sender,
-    receiver,
-    store,
-    events,
-    send: () => sender.send({ kind: plan.kind, files: hashed, senderName: '测试机' }),
-    transferId: transferIdFromHashes(hashed),
-  };
+  });
+  shares.add(built.entry, built.source);
+  await flush(2);
+
+  return { network, owner, downloader, third, events, shares, downloads, store, ...built };
 }
 
-test('单文件端到端：数据一致、双侧事件完整', async () => {
-  const bytes = randomBytes(CHUNK * 3 + 17, 1);
-  const ctx = await setup({ files: [{ path: 'note.txt', bytes }] });
+test('登记之后零字节：没有点击下载就不会传输', async () => {
+  const ctx = await setup({ files: [{ path: 'note.bin', bytes: randomBytes(CHUNK * 2, 1) }] });
 
-  const result = await ctx.send();
+  await flush(10);
 
-  assert.equal(result.transferId, ctx.transferId);
-  assert.equal(result.manifest.kind, 'single');
-  assert.deepEqual([...(await collectStored(ctx.store, result.transferId, 0))], [...bytes]);
-
-  const manifestEvent = ctx.events.receiver.find((event) => event.type === 'manifest');
-  assert.equal(manifestEvent.manifest.files[0].sha256, hashOf(bytes));
-  assert.equal(manifestEvent.resumedBytes, 0);
-
-  const fileEvents = ctx.events.receiver.filter((event) => event.type === 'file-done');
-  assert.equal(fileEvents.length, 1);
-  assert.equal(fileEvents[0].status, 'ok');
-  assert.equal(fileEvents[0].sha256, hashOf(bytes));
-  assert.ok(ctx.events.receiver.some((event) => event.type === 'complete'));
-
-  assert.ok(ctx.events.sender.some((event) => event.type === 'manifest'));
-  assert.ok(ctx.events.sender.some((event) => event.type === 'file-sent'));
-  assert.ok(ctx.events.sender.some((event) => event.type === 'complete'));
-  assert.equal(ctx.sender.aborted, null);
+  assert.equal(ctx.network.stats.binaryFrames, 0, '没有请求就不应发送任何数据帧');
+  assert.equal(ctx.network.stats.bytes, 0);
+  assert.equal(ctx.network.stats.payloads, 0, '连控制消息也不应主动发出');
+  assert.ok(!ctx.events.owner.some((event) => event.type === 'download-started'));
+  assert.ok(!ctx.events.owner.some((event) => event.type === 'served'));
 });
 
-test('文件夹端到端：多文件 + 0 字节文件 + 子目录', async () => {
-  const files = [
-    { path: '相册/a.bin', bytes: randomBytes(CHUNK + 5, 2) },
-    { path: '相册/sub/b.bin', bytes: randomBytes(CHUNK * 2, 3) },
-    { path: '相册/空文件.txt', bytes: new Uint8Array(0) },
-  ];
-  const ctx = await setup({ files });
-  assert.equal(ctx.plan.kind, 'folder');
-  assert.equal(ctx.plan.fileCount, 3);
+test('记录区是拉取来的：索引只含文件位置（名称/大小/哈希）', async () => {
+  const bytes = randomBytes(CHUNK + 5, 2);
+  const ctx = await setup({ files: [{ path: '相册/a.bin', bytes }] });
 
-  await ctx.send();
+  // 索引响应是普通 relay 事件，用一个原始监听器收下来
+  const received = [];
+  ctx.downloader.onEvent((event) => {
+    if (event.type === 'relay') {
+      received.push(event.payload);
+    }
+  });
+  ctx.downloader.relay(ctx.owner.selfId, indexRequestMessage());
+  await flush(4);
 
-  for (let i = 0; i < files.length; i++) {
-    assert.deepEqual(
-      [...(await collectStored(ctx.store, ctx.transferId, i))],
-      [...files[i].bytes],
-      `${files[i].path} 内容应一致`,
-    );
-  }
-  const statuses = ctx.events.receiver
+  assert.equal(received.length, 1);
+  assert.equal(received[0].k, KIND.INDEX);
+  assert.equal(received[0].entries.length, 1);
+  const entry = received[0].entries[0];
+  assert.equal(entry.shareId, ctx.entry.shareId);
+  assert.equal(entry.files[0].sha256, ctx.entry.files[0].sha256);
+  assert.equal(entry.totalBytes, bytes.length);
+  assert.equal(
+    'content' in entry.files[0] || 'bytes' in entry.files[0],
+    false,
+    '索引里不能有文件内容',
+  );
+  assert.equal(ctx.network.stats.binaryFrames, 0, '拉取索引不传文件字节');
+});
+
+test('点击下载才传输：数据一致、双方事件完整、旁观者收不到任何东西', async () => {
+  const bytes = randomBytes(CHUNK * 3 + 17, 3);
+  const ctx = await setup({ files: [{ path: 'report.bin', bytes }] });
+
+  const { streamId } = ctx.downloads.request(ctx.owner.selfId, ctx.entry);
+  assert.ok(streamId >= 1);
+  const complete = await waitForEvent(ctx.events.downloader, 'complete');
+  assert.equal(complete.shareId, ctx.entry.shareId);
+
+  const stored = await collectStored(ctx.store, ctx.entry.shareId, 0);
+  assert.deepEqual([...stored], [...bytes], '接收到的数据必须与源文件逐字节一致');
+
+  const statuses = ctx.events.downloader
     .filter((event) => event.type === 'file-done')
     .map((event) => event.status);
-  assert.deepEqual(statuses, ['ok', 'ok', 'ok']);
-  assert.ok(ctx.events.receiver.some((event) => event.type === 'complete'));
-});
+  assert.deepEqual(statuses, ['ok']);
+  assert.ok(ctx.events.owner.some((event) => event.type === 'download-started'));
+  assert.ok(ctx.events.owner.some((event) => event.type === 'served'));
+  assert.equal(ctx.events.owner.find((event) => event.type === 'served').shareId, ctx.entry.shareId);
 
-test('断线续传：重连后只补传剩余块', async () => {
-  const bytes = randomBytes(CHUNK * 8, 4);
-  const files = [{ path: 'big.bin', bytes }];
-  const store = createMemoryStore();
-  const first = await setup({ files, store, pairOptions: { dropAfterBytes: CHUNK * 3 } });
-
-  await assert.rejects(first.send(), /断开|关闭/);
-  await first.receiver.drain();
-  const partial = await collectStored(store, first.transferId, 0);
-  assert.equal(partial.length, CHUNK * 3, '断开前应恰好落盘 3 块');
-
-  // 重连：新通道、新的发送/接收实例，但复用同一个存储
-  const second = await setup({ files, store });
-  await second.send();
-
-  assert.equal(second.transferId, first.transferId, '内容寻址：重连后传输 ID 不变');
-  const finished = await collectStored(store, second.transferId, 0);
-  assert.deepEqual([...finished], [...bytes], '续传后内容必须完整一致');
-  assert.equal(second.pair.stats.binaryFramesAToB, 5, '只需要补传剩余 5 块');
-  assert.ok(
-    second.events.sender.some((event) => event.type === 'resumed' && event.resumedBytes === CHUNK * 3),
-    '发送方应知道从 3 块处继续',
+  assert.equal(ctx.network.stats.binaryFrames, 4, '4 个分块');
+  assert.deepEqual(
+    ctx.events.third.filter((event) => event.type !== 'welcome'),
+    [],
+    '旁观者不应收到任何消息（不广播）',
   );
 });
 
-test('篡改数据被检出，发送方自动重传后校验通过', async () => {
-  const bytes = randomBytes(CHUNK * 2, 5);
-  const ctx = await setup({
-    files: [{ path: 'tampered.bin', bytes }],
-    pairOptions: { tamperFirstBinary: 1 },
-  });
-
-  await ctx.send();
-
-  const statuses = ctx.events.receiver
-    .filter((event) => event.type === 'file-done')
-    .map((event) => event.status);
-  assert.deepEqual(statuses, ['hash-mismatch', 'ok'], '第一次应检出篡改，重传后通过');
-  assert.ok(ctx.events.sender.some((event) => event.type === 'retry'));
-  assert.deepEqual([...(await collectStored(ctx.store, ctx.transferId, 0))], [...bytes]);
-});
-
-test('重复块幂等：不会重复计数，也不会破坏数据', async () => {
-  const bytes = randomBytes(CHUNK, 6);
-  const store = createMemoryStore();
-  const pair = createChannelPair();
-  const receiver = new Receiver({
-    store,
-    channel: pair.b,
-    ackIntervalBytes: CHUNK,
-    onEvent: () => {},
-  }).attach();
-  const source = createBufferSource([{ path: 'x.bin', bytes }]);
-  const [hashed] = await hashSource(source, { chunkSize: CHUNK });
-  const transferId = transferIdFromHashes([hashed]);
+test('没有请求过的流被直接丢弃（不无操作直接下载）', async () => {
+  const bytes = randomBytes(CHUNK, 4);
+  const ctx = await setup({ files: [{ path: 'x.bin', bytes }] });
+  const rogue = ctx.network.createClient({ name: '陌生会话' });
+  rogue.connect();
+  await flush(1);
 
   const manifest = manifestMessage({
-    transferId,
+    shareId: ctx.entry.shareId,
+    streamId: 4242,
     kind: 'single',
-    senderName: '对端',
+    senderName: '陌生会话',
     chunkSize: CHUNK,
-    files: [hashed],
+    files: ctx.entry.files,
   });
-  await pair.a.sendText(JSON.stringify(manifest));
-  const frame = encodeDataFrame(0, 0, bytes);
-  await pair.a.sendBinary(frame);
-  await pair.a.sendBinary(frame);
-  await receiver.drain();
+  rogue.relay(ctx.downloader.selfId, manifest);
+  await rogue.bind(ctx.downloader.selfId);
+  rogue.sendBinary(encodeDataFrame(4242, 0, 0, bytes));
+  await flush(6);
 
-  assert.equal((await collectStored(store, transferId, 0)).length, CHUNK);
-  const stored = await store.loadTransfer(transferId);
-  assert.equal(stored.files[0].received, CHUNK);
-  assert.equal(stored.files[0].chunks, 1);
+  assert.ok(
+    ctx.events.downloader.some((event) => event.type === 'unexpected-payload'),
+    '未请求的 manifest 必须被忽略',
+  );
+  assert.ok(
+    ctx.events.downloader.some((event) => event.type === 'unexpected-frame'),
+    '未请求的二进制帧必须被丢弃',
+  );
+  assert.equal((await collectStored(ctx.store, ctx.entry.shareId, 0)).length, 0, '不得落盘');
 });
 
-test('源文件在传输中被修改：发送方中止并报错', async () => {
+test('断点续传：中断后重新点击下载，只补传剩余分块', async () => {
+  const bytes = randomBytes(CHUNK * 8, 5);
+  const files = [{ path: 'big.bin', bytes }];
+  const store = createMemoryStore();
+  const first = await setup({
+    files,
+    store,
+    ownerOptions: { dropAfterBytes: CHUNK * 3 },
+  });
+
+  first.downloads.request(first.owner.selfId, first.entry);
+  await waitForEvent(first.events.owner, 'serve-failed');
+  await flush(4);
+  const partial = await collectStored(store, first.entry.shareId, 0);
+  assert.equal(partial.length, CHUNK * 3, '断开前应恰好落盘 3 个分块');
+
+  // 重连：新的会话 id、同一个内容寻址记录
+  const second = await setup({ files, store });
+  assert.equal(second.entry.shareId, first.entry.shareId, '同一批文件 → 同一个 shareId');
+  second.downloads.request(second.owner.selfId, second.entry);
+  await waitForEvent(second.events.downloader, 'complete');
+
+  assert.deepEqual(
+    [...(await collectStored(store, second.entry.shareId, 0))],
+    [...bytes],
+    '续传后内容完整',
+  );
+  assert.equal(second.network.stats.binaryFrames, 5, '只需要补传剩余 5 个分块');
+  assert.ok(
+    second.events.owner.some(
+      (event) => event.type === 'resumed' && event.resumedBytes === CHUNK * 3,
+    ),
+  );
+});
+
+test('篡改数据被检出，分享者自动重传后校验通过', async () => {
+  const bytes = randomBytes(CHUNK * 2, 6);
+  const ctx = await setup({
+    files: [{ path: 'tampered.bin', bytes }],
+    ownerOptions: { tamperFirstFrames: 1 },
+  });
+
+  ctx.downloads.request(ctx.owner.selfId, ctx.entry);
+  await waitForEvent(ctx.events.downloader, 'complete');
+
+  const statuses = ctx.events.downloader
+    .filter((event) => event.type === 'file-done')
+    .map((event) => event.status);
+  assert.deepEqual(statuses, ['hash-mismatch', 'ok'], '先检出篡改，重传后通过');
+  assert.ok(ctx.events.owner.some((event) => event.type === 'retry'));
+  assert.deepEqual([...(await collectStored(ctx.store, ctx.entry.shareId, 0))], [...bytes]);
+});
+
+test('分享者在传输中被修改：立即中止并报错', async () => {
   const bytes = randomBytes(CHUNK * 2, 7);
   const ctx = await setup({ files: [{ path: 'changing.bin', bytes }] });
 
-  const originalRead = ctx.source.read;
-  let mutated = false;
-  ctx.source.read = async (i, offset, length) => {
-    const data = await originalRead(i, offset, length);
-    if (!mutated) {
-      mutated = true;
-      ctx.source.mutate(i, ctx.source.bytes(i).length - 1, 0x5a); // 改动后面某一块
-    }
-    return data;
-  };
+  // 登记之后、下载之前，文件内容被本地改动
+  ctx.source.mutate(0, bytes.length - 1, 0x5a);
 
-  await assert.rejects(ctx.send(), /被修改/);
-  assert.equal(ctx.sender.aborted?.code, 'source-changed');
+  ctx.downloads.request(ctx.owner.selfId, ctx.entry);
+  const failed = await waitForEvent(ctx.events.owner, 'serve-failed');
+  assert.equal(failed.error.code, 'source-changed');
+  assert.ok(!ctx.events.downloader.some((event) => event.type === 'complete'));
 });
 
-test('流控：未确认字节不超过窗口 + 一块', async () => {
+test('流控：未确认字节被窗口约束', async () => {
   const bytes = randomBytes(CHUNK * 10, 8);
-  const store = withLatency(createMemoryStore(), { putChunkMs: 1 });
   const ctx = await setup({
     files: [{ path: 'flow.bin', bytes }],
-    store,
     windowBytes: CHUNK * 2,
-    pairOptions: { latencyMs: 1 },
-    receiverOptions: { ackIntervalBytes: CHUNK },
   });
 
-  await ctx.send();
+  ctx.downloads.request(ctx.owner.selfId, ctx.entry);
+  await waitForEvent(ctx.events.downloader, 'complete');
 
-  assert.deepEqual([...(await collectStored(ctx.store, ctx.transferId, 0))], [...bytes]);
-  const total = bytes.length;
-  const progress = ctx.events.sender.filter((event) => event.type === 'progress');
-  assert.equal(progress.length, total / CHUNK);
+  const progress = ctx.events.owner.filter((event) => event.type === 'progress');
+  assert.equal(progress.length, 10);
   for (const event of progress) {
-    assert.ok(
-      event.inflight <= CHUNK * 2,
-      `发送端在途字节必须被窗口约束，实际 ${event.inflight}`,
-    );
+    assert.ok(event.inflight <= CHUNK * 2, `在途字节应被限制，实际 ${event.inflight}`);
   }
-  assert.ok(
-    ctx.pair.stats.maxInflight < total,
-    `窗口应当真正生效（否则会一次性推完 ${total} 字节）`,
-  );
 });
 
-test('接收方迟迟不给断点信息：发送方超时报错', async () => {
-  const pair = createChannelPair();
-  const source = createBufferSource([{ path: 'a.bin', bytes: randomBytes(10, 9) }]);
-  const sender = new Sender({
-    source,
-    channel: pair.a,
-    chunkSize: CHUNK,
-    resumeTimeoutMs: 30,
-    verifyTimeoutMs: 500,
-  }).attach();
-  const [hashed] = await hashSource(source, { chunkSize: CHUNK });
-
-  await assert.rejects(
-    sender.send({ kind: 'single', files: [hashed], senderName: 'A' }),
-    /超时/,
-  );
-});
-
-test('对端不回校验结果：发送方超时报错', async () => {
-  const pair = createChannelPair();
-  const source = createBufferSource([{ path: 'a.bin', bytes: randomBytes(CHUNK + 1, 10) }]);
-  const sender = new Sender({
-    source,
-    channel: pair.a,
-    chunkSize: CHUNK,
-    verifyTimeoutMs: 40,
-    resumeTimeoutMs: 500,
-  }).attach();
-  const [hashed] = await hashSource(source, { chunkSize: CHUNK });
-
-  // 只回 resume-state，永远不回 file-done
-  pair.b.onMessage((message) => {
-    if (message.binary) {
-      return;
-    }
-    const parsed = JSON.parse(message.text);
-    if (parsed.t === MESSAGE.MANIFEST) {
-      void pair.b.sendText(
-        JSON.stringify(
-          resumeStateMessage({
-            transferId: parsed.transferId,
-            files: parsed.files.map((file) => ({ i: file.i, received: 0 })),
-          }),
-        ),
-      );
-    }
-  });
-
-  await assert.rejects(
-    sender.send({ kind: 'single', files: [hashed], senderName: 'A' }),
-    /超时/,
-  );
-});
-
-test('对端报错：发送方中止', async () => {
-  const pair = createChannelPair();
-  const source = createBufferSource([{ path: 'a.bin', bytes: randomBytes(CHUNK + 1, 11) }]);
-  const sender = new Sender({
-    source,
-    channel: pair.a,
-    chunkSize: CHUNK,
-    verifyTimeoutMs: 300,
-    resumeTimeoutMs: 300,
-  }).attach();
-  const [hashed] = await hashSource(source, { chunkSize: CHUNK });
-
-  let reported = false;
-  pair.b.onMessage((message) => {
-    if (message.binary) {
-      if (!reported) {
-        reported = true;
-        void pair.b.sendText(
-          JSON.stringify(
-            errorMessage({
-              transferId: transferIdFromHashes([hashed]),
-              code: 'disk-full',
-              message: '磁盘写满',
-            }),
-          ),
-        );
-      }
-      return;
-    }
-    const parsed = JSON.parse(message.text);
-    if (parsed.t === MESSAGE.MANIFEST) {
-      void pair.b.sendText(
-        JSON.stringify(
-          resumeStateMessage({
-            transferId: parsed.transferId,
-            files: parsed.files.map((file) => ({ i: file.i, received: 0 })),
-          }),
-        ),
-      );
-    }
-  });
-
-  await assert.rejects(
-    sender.send({ kind: 'single', files: [hashed], senderName: 'A' }),
-    /磁盘写满/,
-  );
+test('下载不存在的记录：收到明确拒绝，且不产生任何数据', async () => {
+  const ctx = await setup({ files: [{ path: 'a.bin', bytes: randomBytes(10, 9) }] });
+  const stranger = ctx.network.createClient({ name: '没登记的人' });
+  stranger.connect();
   await flush(1);
+
+  const received = [];
+  stranger.onEvent((event) => {
+    if (event.type === 'relay') {
+      received.push(event.payload);
+    }
+  });
+  stranger.relay(ctx.owner.selfId, {
+    k: KIND.DOWNLOAD_REQUEST,
+    shareId: 'deadbeefdeadbeefdeadbeefdeadbeef',
+    streamId: 1,
+  });
+  await flush(4);
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].k, KIND.ERROR);
+  assert.equal(received[0].code, 'unknown-share');
+  assert.equal(ctx.network.stats.binaryFrames, 0);
 });

@@ -14,7 +14,7 @@ import {
   safeFileName,
   zipNameFor,
 } from '../../web/lib/zip.js';
-import { randomBytes } from './support/harness.js';
+import { randomBytes } from './support/relay-harness.js';
 
 const entry = (path, bytes) => ({
   path,

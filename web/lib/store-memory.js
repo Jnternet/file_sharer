@@ -8,17 +8,17 @@ export function createMemoryStore() {
   /** @type {Map<string, {manifest: object, files: Map<number, {data: Map<number, Uint8Array>}>}>} */
   const transfers = new Map();
 
-  const bucket = (transferId) => {
-    let transfer = transfers.get(transferId);
+  const bucket = (shareId) => {
+    let transfer = transfers.get(shareId);
     if (!transfer) {
       transfer = { manifest: null, files: new Map() };
-      transfers.set(transferId, transfer);
+      transfers.set(shareId, transfer);
     }
     return transfer;
   };
 
-  const fileBucket = (transferId, fileIndex) => {
-    const transfer = bucket(transferId);
+  const fileBucket = (shareId, fileIndex) => {
+    const transfer = bucket(shareId);
     let file = transfer.files.get(fileIndex);
     if (!file) {
       file = { data: new Map() };
@@ -39,11 +39,11 @@ export function createMemoryStore() {
 
   return {
     async saveManifest(manifest) {
-      bucket(manifest.transferId).manifest = structuredClone(manifest);
+      bucket(manifest.shareId).manifest = structuredClone(manifest);
     },
 
-    async loadTransfer(transferId) {
-      const transfer = transfers.get(transferId);
+    async loadTransfer(shareId) {
+      const transfer = transfers.get(shareId);
       if (!transfer || !transfer.manifest) {
         return null;
       }
@@ -56,8 +56,8 @@ export function createMemoryStore() {
       };
     },
 
-    async putChunk({ transferId, fileIndex, chunkIndex, bytes }) {
-      const file = fileBucket(transferId, fileIndex);
+    async putChunk({ shareId, fileIndex, chunkIndex, bytes }) {
+      const file = fileBucket(shareId, fileIndex);
       if (file.data.has(chunkIndex)) {
         return { received: receivedOf(file), chunks: file.data.size };
       }
@@ -68,8 +68,8 @@ export function createMemoryStore() {
       return { received: receivedOf(file), chunks: file.data.size };
     },
 
-    async *readChunks(transferId, fileIndex) {
-      const file = transfers.get(transferId)?.files.get(fileIndex);
+    async *readChunks(shareId, fileIndex) {
+      const file = transfers.get(shareId)?.files.get(fileIndex);
       if (!file) {
         return;
       }
@@ -79,19 +79,19 @@ export function createMemoryStore() {
       }
     },
 
-    async deleteFile(transferId, fileIndex) {
-      transfers.get(transferId)?.files.delete(fileIndex);
+    async deleteFile(shareId, fileIndex) {
+      transfers.get(shareId)?.files.delete(fileIndex);
     },
 
-    async deleteTransfer(transferId) {
-      transfers.delete(transferId);
+    async deleteTransfer(shareId) {
+      transfers.delete(shareId);
     },
 
     async listTransfers() {
       return [...transfers.entries()]
         .filter(([, transfer]) => transfer.manifest !== null)
-        .map(([transferId, transfer]) => ({
-          transferId,
+        .map(([shareId, transfer]) => ({
+          shareId,
           manifest: structuredClone(transfer.manifest),
           files: [...transfer.files.entries()].map(([i, file]) => ({
             i,

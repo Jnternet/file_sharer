@@ -1,19 +1,13 @@
-// 发送核心：预哈希 → manifest → 断点续传 → 窗口流控 → 传输中复算 → 校验失败重传。
+// 分享者侧：只有在收到 download-request 之后才读文件、发字节。
 
 import { encodeDataFrame } from './framing.js';
-import {
-  DEFAULT_CHUNK_SIZE,
-  chunkCount,
-  chunkRange,
-  nextChunkIndex,
-  transferIdFromHashes,
-} from './plan.js';
+import { DEFAULT_CHUNK_SIZE, chunkCount, chunkRange, nextChunkIndex } from './plan.js';
 import {
   FILE_STATUS,
-  MESSAGE,
+  KIND,
   cancelMessage,
   manifestMessage,
-  parseControl,
+  parsePayload,
 } from './protocol.js';
 import { Sha256 } from './sha256.js';
 import { SendWindow } from './window.js';
@@ -23,10 +17,7 @@ export const DEFAULT_RESUME_TIMEOUT_MS = 30_000;
 export const DEFAULT_VERIFY_TIMEOUT_MS = 10 * 60_000;
 
 /**
- * 发送前的预哈希（需求 R6 的"上传前校验"）。
- *
- * @param {{fileCount:number,totalBytes:number,file:(i:number)=>object,read:(i:number,offset:number,length:number)=>Promise<Uint8Array>}} source
- * @returns {Promise<Array<{i:number,path:string,size:number,mime?:string,sha256:string}>>}
+ * 登记前的预哈希（"上传前校验"）：只读本地文件，不发送任何字节。
  */
 export async function hashSource(source, { chunkSize = DEFAULT_CHUNK_SIZE, onProgress } = {}) {
   const files = [];
@@ -44,7 +35,12 @@ export async function hashSource(source, { chunkSize = DEFAULT_CHUNK_SIZE, onPro
       }
       hasher.update(bytes);
       processed += length;
-      onProgress?.({ fileIndex: i, path: info.path, processedBytes: processed, totalBytes: source.totalBytes });
+      onProgress?.({
+        fileIndex: i,
+        path: info.path,
+        processedBytes: processed,
+        totalBytes: source.totalBytes,
+      });
     }
     files.push({
       i,
@@ -73,6 +69,7 @@ export class Sender {
   #fileWaiters = new Map();
   #resumeWaiters = [];
   #aborted = null;
+  #sentBytes = 0;
 
   constructor({
     source,
@@ -97,52 +94,49 @@ export class Sender {
     this.#onEvent = onEvent;
   }
 
-  attach() {
-    this.#channel.onMessage((message) => {
-      this.#enqueue(() => this.#handleMessage(message));
-    });
-    this.#channel.onClose(() => {
-      this.abort(new Error('数据通道已关闭'));
-    });
-    return this;
+  get shareId() {
+    return this.#manifest?.shareId ?? null;
   }
 
-  get transferId() {
-    return this.#manifest?.transferId ?? null;
+  get streamId() {
+    return this.#manifest?.streamId ?? null;
+  }
+
+  get sentBytes() {
+    return this.#sentBytes;
   }
 
   get aborted() {
     return this.#aborted;
   }
 
-  /** 等待内部消息队列处理完（测试/收尾用）。 */
   async drain() {
     await this.#queue;
   }
 
   /**
-   * 发送一批文件（files 来自 hashSource，kind 来自 buildSelectionPlan）。
-   * @returns {Promise<{transferId:string, manifest:object}>}
+   * 开始一次传输。只应由"收到 download-request"这一路径调用。
+   * @returns {Promise<{shareId:string, manifest:object}>}
    */
-  async send({ kind, files, senderName }) {
-    const transferId = transferIdFromHashes(files);
+  async send({ shareId, streamId, kind, files, senderName }) {
     const manifest = manifestMessage({
-      transferId,
+      shareId,
+      streamId,
       kind,
       senderName,
       chunkSize: this.#chunkSize,
       files,
     });
     this.#manifest = manifest;
-    this.#emit({ type: 'manifest', manifest });
+    this.#emit({ type: 'manifest', shareId, streamId, manifest });
 
-    const resumePromise = this.#awaitResumeState(manifest.transferId);
+    const resumePromise = this.#awaitResumeState(shareId);
     await this.#send(manifest);
     const resume = await resumePromise;
     const resumedByIndex = new Map(resume.files.map((file) => [file.i, file.received]));
     this.#emit({
       type: 'resumed',
-      transferId,
+      shareId,
       resumedBytes: [...resumedByIndex.values()].reduce((sum, value) => sum + value, 0),
     });
 
@@ -182,14 +176,23 @@ export class Sender {
         this.#fileStatus.delete(fileIndex);
         this.#fileWaiters.delete(fileIndex);
       }
-      this.#emit({ type: 'retry', transferId, files: failed, round });
+      this.#emit({ type: 'retry', shareId, files: failed, round });
     }
 
-    this.#emit({ type: 'complete', transferId, manifest });
-    return { transferId, manifest };
+    this.#emit({ type: 'complete', shareId, manifest });
+    return { shareId, manifest };
   }
 
-  /** UI 取消：通知对端并让所有等待中的窗口失败。 */
+  /** 处理下载者发回的负载（ack / resume-state / file-done / ...）。 */
+  handlePayload(raw) {
+    this.#queue = this.#queue
+      .then(() => this.#handlePayload(raw))
+      .catch((error) => {
+        this.#emit({ type: 'error', error, shareId: this.#manifest?.shareId });
+      });
+    return this.#queue;
+  }
+
   abort(reason) {
     if (this.#aborted) {
       return this.#aborted;
@@ -209,85 +212,69 @@ export class Sender {
     this.#fileWaiters.clear();
     if (this.#manifest) {
       void this.#send(
-        cancelMessage({ transferId: this.#manifest.transferId, reason: error.message }),
+        cancelMessage({ shareId: this.#manifest.shareId, reason: error.message }),
       ).catch(() => {});
     }
     return error;
   }
 
-  #enqueue(task) {
-    this.#queue = this.#queue
-      .then(task)
-      .catch((error) => {
-        this.#emit({ type: 'error', error, transferId: this.#manifest?.transferId });
-      });
-    return this.#queue;
-  }
-
-  async #handleMessage(message) {
-    if (message?.binary) {
-      // 发送方不接收数据帧
-      this.#emit({ type: 'unexpected-binary', transferId: this.#manifest?.transferId });
-      return;
-    }
-    let control;
+  async #handlePayload(raw) {
+    let message;
     try {
-      control = parseControl(message?.text);
+      message = parsePayload(raw);
     } catch (error) {
       this.#emit({ type: 'protocol-error', error });
       return;
     }
-    if (control.transferId && this.#manifest && control.transferId !== this.#manifest.transferId) {
-      this.#emit({ type: 'ignored', message: control });
+    if (message.shareId && this.#manifest && message.shareId !== this.#manifest.shareId) {
+      this.#emit({ type: 'ignored', message });
       return;
     }
 
-    switch (control.t) {
-      case MESSAGE.RESUME_STATE: {
+    switch (message.k) {
+      case KIND.RESUME_STATE: {
         const waiters = this.#resumeWaiters;
         this.#resumeWaiters = [];
         for (const waiter of waiters) {
-          waiter.resolve(control);
+          waiter.resolve(message);
         }
         return;
       }
-      case MESSAGE.ACK: {
-        this.#windows.get(control.i)?.ack(control.received);
+      case KIND.ACK: {
+        this.#windows.get(message.i)?.ack(message.received);
         return;
       }
-      case MESSAGE.FILE_DONE: {
+      case KIND.FILE_DONE: {
         this.#emit({
           type: 'file-done',
-          transferId: control.transferId,
-          fileIndex: control.i,
-          status: control.status,
-          sha256: control.sha256,
+          shareId: message.shareId,
+          fileIndex: message.i,
+          status: message.status,
+          sha256: message.sha256,
         });
-        this.#fileStatus.set(control.i, control.status);
-        const waiter = this.#fileWaiters.get(control.i);
+        this.#fileStatus.set(message.i, message.status);
+        const waiter = this.#fileWaiters.get(message.i);
         if (waiter) {
-          this.#fileWaiters.delete(control.i);
-          waiter.resolve(control.status);
+          this.#fileWaiters.delete(message.i);
+          waiter.resolve(message.status);
         }
         return;
       }
-      case MESSAGE.TRANSFER_DONE:
+      case KIND.TRANSFER_DONE:
         this.#emit({
           type: 'remote-complete',
-          transferId: control.transferId,
-          status: control.status,
+          shareId: message.shareId,
+          status: message.status,
         });
         return;
-      case MESSAGE.CANCEL: {
-        this.#fail(new Error(`对端取消：${control.reason}`));
+      case KIND.CANCEL:
+        this.#fail(new Error(`下载方取消：${message.reason}`));
         return;
-      }
-      case MESSAGE.ERROR: {
-        this.#fail(new Error(`对端报错（${control.code}）：${control.message}`));
+      case KIND.ERROR:
+        this.#fail(new Error(`下载方报错（${message.code}）：${message.message}`));
         return;
-      }
       default:
-        this.#emit({ type: 'ignored', message: control });
+        this.#emit({ type: 'ignored', message });
         return;
     }
   }
@@ -320,18 +307,21 @@ export class Sender {
         continue;
       }
       await window.waitForRoom(length);
-      await this.#channel.sendBinary(encodeDataFrame(file.i, index, bytes));
+      await this.#channel.sendBinary(
+        encodeDataFrame(this.#manifest.streamId, file.i, index, bytes),
+      );
       window.add(length);
       sent += length;
+      this.#sentBytes += length;
       this.#emit({
         type: 'progress',
-        transferId: this.#manifest.transferId,
+        shareId: this.#manifest.shareId,
+        streamId: this.#manifest.streamId,
         fileIndex: file.i,
         path: file.path,
         sent,
         size: file.size,
         resumedFrom: startChunk * chunkSize,
-        // 当前在途（已发未确认）字节：UI 可直接展示，测试用于验证流控不变量
         inflight: window.inflight,
       });
     }
@@ -345,7 +335,8 @@ export class Sender {
     }
     this.#emit({
       type: 'file-sent',
-      transferId: this.#manifest.transferId,
+      shareId: this.#manifest.shareId,
+      streamId: this.#manifest.streamId,
       fileIndex: file.i,
       path: file.path,
       size: file.size,
@@ -353,15 +344,15 @@ export class Sender {
     });
   }
 
-  #awaitResumeState(transferId) {
+  #awaitResumeState(shareId) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error(`等待接收方断点信息超时（${this.#resumeTimeoutMs}ms）`));
+        reject(new Error(`等待下载方的断点信息超时（${this.#resumeTimeoutMs}ms）`));
       }, this.#resumeTimeoutMs);
       this.#resumeWaiters.push({
         resolve: (message) => {
           clearTimeout(timer);
-          if (message.transferId !== transferId) {
+          if (message.shareId !== shareId) {
             reject(new Error('收到了其它传输的断点信息'));
             return;
           }
@@ -411,7 +402,7 @@ export class Sender {
   }
 
   async #send(message) {
-    await this.#channel.sendText(JSON.stringify(message));
+    await this.#channel.send(message);
   }
 
   #emit(event) {

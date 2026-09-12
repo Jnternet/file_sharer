@@ -8,14 +8,14 @@ const DB_VERSION = 1;
 const CHUNKS = 'chunks';
 const TRANSFERS = 'transfers';
 
-export function chunkKey(transferId, fileIndex, chunkIndex) {
-  return [transferId, fileIndex, chunkIndex];
+export function chunkKey(shareId, fileIndex, chunkIndex) {
+  return [shareId, fileIndex, chunkIndex];
 }
 
-export function chunkRangeFor(transferId, fileIndex, rangeFactory = globalThis.IDBKeyRange) {
+export function chunkRangeFor(shareId, fileIndex, rangeFactory = globalThis.IDBKeyRange) {
   return rangeFactory.bound(
-    [transferId, fileIndex, 0],
-    [transferId, fileIndex, Number.MAX_SAFE_INTEGER],
+    [shareId, fileIndex, 0],
+    [shareId, fileIndex, Number.MAX_SAFE_INTEGER],
   );
 }
 
@@ -29,10 +29,10 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
     async saveManifest(manifest) {
       const tx = db.transaction(TRANSFERS, 'readwrite');
       const store = tx.objectStore(TRANSFERS);
-      const existing = await request(store.get(manifest.transferId));
+      const existing = await request(store.get(manifest.shareId));
       await request(
         store.put({
-          transferId: manifest.transferId,
+          shareId: manifest.shareId,
           manifest,
           files: existing?.files ?? {},
         }),
@@ -40,8 +40,8 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
       await done(tx);
     },
 
-    async loadTransfer(transferId) {
-      const record = await request(db.transaction(TRANSFERS).objectStore(TRANSFERS).get(transferId));
+    async loadTransfer(shareId) {
+      const record = await request(db.transaction(TRANSFERS).objectStore(TRANSFERS).get(shareId));
       if (!record) {
         return null;
       }
@@ -55,12 +55,12 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
       };
     },
 
-    async putChunk({ transferId, fileIndex, chunkIndex, bytes }) {
+    async putChunk({ shareId, fileIndex, chunkIndex, bytes }) {
       const tx = db.transaction([CHUNKS, TRANSFERS], 'readwrite');
       const chunks = tx.objectStore(CHUNKS);
       const transfers = tx.objectStore(TRANSFERS);
-      const record = await request(transfers.get(transferId));
-      const key = chunkKey(transferId, fileIndex, chunkIndex);
+      const record = await request(transfers.get(shareId));
+      const key = chunkKey(shareId, fileIndex, chunkIndex);
       const existing = await request(chunks.get(key));
       if (existing) {
         await done(tx);
@@ -70,7 +70,7 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
       const copy = bytes.slice();
       await request(
         chunks.put({
-          transferId,
+          shareId,
           fileIndex,
           chunkIndex,
           size: copy.length,
@@ -80,34 +80,34 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
       const files = { ...(record?.files ?? {}) };
       const meta = files[fileIndex] ?? { received: 0, chunks: 0 };
       files[fileIndex] = { received: meta.received + copy.length, chunks: meta.chunks + 1 };
-      await request(transfers.put({ ...record, transferId, files }));
+      await request(transfers.put({ ...record, shareId, files }));
       await done(tx);
       return files[fileIndex];
     },
 
-    async *readChunks(transferId, fileIndex) {
+    async *readChunks(shareId, fileIndex) {
       // 逐块读取（每块一个事务）：块数来自元数据，顺序由 chunkIndex 决定。
       // 不用游标是因为长事务在 await 边界上会被浏览器自动提交，进而报
       // TransactionInactiveError / AbortError。
       const meta = await request(
-        db.transaction(TRANSFERS).objectStore(TRANSFERS).get(transferId),
+        db.transaction(TRANSFERS).objectStore(TRANSFERS).get(shareId),
       );
       const chunks = meta?.files?.[fileIndex]?.chunks ?? 0;
       for (let index = 0; index < chunks; index++) {
         const record = await request(
-          db.transaction(CHUNKS).objectStore(CHUNKS).get(chunkKey(transferId, fileIndex, index)),
+          db.transaction(CHUNKS).objectStore(CHUNKS).get(chunkKey(shareId, fileIndex, index)),
         );
         if (!record) {
-          throw new Error(`断点数据缺失：块 ${index}（${transferId}/${fileIndex}）`);
+          throw new Error(`断点数据缺失：块 ${index}（${shareId}/${fileIndex}）`);
         }
         yield new Uint8Array(record.bytes);
       }
     },
 
-    async deleteFile(transferId, fileIndex) {
+    async deleteFile(shareId, fileIndex) {
       const tx = db.transaction([CHUNKS, TRANSFERS], 'readwrite');
       const chunks = tx.objectStore(CHUNKS);
-      const cursorRequest = chunks.openCursor(chunkRangeFor(transferId, fileIndex));
+      const cursorRequest = chunks.openCursor(chunkRangeFor(shareId, fileIndex));
       cursorRequest.onsuccess = () => {
         const cursor = cursorRequest.result;
         if (cursor) {
@@ -116,7 +116,7 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
         }
       };
       const transfers = tx.objectStore(TRANSFERS);
-      const record = await request(transfers.get(transferId));
+      const record = await request(transfers.get(shareId));
       if (record) {
         const files = { ...(record.files ?? {}) };
         delete files[fileIndex];
@@ -125,10 +125,10 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
       await done(tx);
     },
 
-    async deleteTransfer(transferId) {
+    async deleteTransfer(shareId) {
       const tx = db.transaction([CHUNKS, TRANSFERS], 'readwrite');
       const chunks = tx.objectStore(CHUNKS);
-      const range = IDBKeyRange.bound([transferId], [transferId, Number.MAX_SAFE_INTEGER]);
+      const range = IDBKeyRange.bound([shareId], [shareId, Number.MAX_SAFE_INTEGER]);
       const cursorRequest = chunks.openCursor(range);
       cursorRequest.onsuccess = () => {
         const cursor = cursorRequest.result;
@@ -137,7 +137,7 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
           cursor.continue();
         }
       };
-      await request(tx.objectStore(TRANSFERS).delete(transferId));
+      await request(tx.objectStore(TRANSFERS).delete(shareId));
       await done(tx);
     },
 
@@ -146,7 +146,7 @@ export async function createIndexedDbStore({ indexedDB: factory = globalThis.ind
       return records
         .filter((record) => record?.manifest)
         .map((record) => ({
-          transferId: record.transferId,
+          shareId: record.shareId,
           manifest: record.manifest,
           files: Object.entries(record.files ?? {}).map(([i, meta]) => ({
             i: Number(i),
@@ -175,12 +175,12 @@ function openDatabase(factory) {
       const db = requestObject.result;
       if (!db.objectStoreNames.contains(CHUNKS)) {
         const chunks = db.createObjectStore(CHUNKS, {
-          keyPath: ['transferId', 'fileIndex', 'chunkIndex'],
+          keyPath: ['shareId', 'fileIndex', 'chunkIndex'],
         });
-        chunks.createIndex('byTransfer', ['transferId', 'fileIndex'], { unique: false });
+        chunks.createIndex('byTransfer', ['shareId', 'fileIndex'], { unique: false });
       }
       if (!db.objectStoreNames.contains(TRANSFERS)) {
-        db.createObjectStore(TRANSFERS, { keyPath: 'transferId' });
+        db.createObjectStore(TRANSFERS, { keyPath: 'shareId' });
       }
     };
     requestObject.onsuccess = () => resolve(requestObject.result);

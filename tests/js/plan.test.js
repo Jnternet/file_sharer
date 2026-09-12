@@ -14,7 +14,7 @@ import {
   relativePathOf,
   remainingBytes,
   resumeOffsetFromBytes,
-  transferIdFromHashes,
+  shareIdFromHashes,
 } from '../../web/lib/plan.js';
 
 const file = (name, size, extra = {}) => ({ name, size, lastModified: 1700000000000, ...extra });
@@ -110,23 +110,23 @@ test('传输 ID 内容寻址：稳定、与顺序无关、内容变化即变化'
   const a = { path: 'a.txt', size: 3, sha256: hash('a') };
   const b = { path: 'b.txt', size: 5, sha256: hash('b') };
 
-  const id1 = transferIdFromHashes([a, b]);
-  const id2 = transferIdFromHashes([b, a]);
+  const id1 = shareIdFromHashes([a, b]);
+  const id2 = shareIdFromHashes([b, a]);
   assert.match(id1, /^[0-9a-f]{32}$/);
   assert.equal(id1, id2, '顺序不应影响传输 ID');
 
-  assert.notEqual(id1, transferIdFromHashes([{ ...a, sha256: hash('c') }, b]), '内容变化应换 ID');
-  assert.notEqual(id1, transferIdFromHashes([{ ...a, path: 'a2.txt' }, b]), '路径变化应换 ID');
-  assert.notEqual(id1, transferIdFromHashes([{ ...a, size: 4 }, b]), '大小变化应换 ID');
-  assert.equal(id1, transferIdFromHashes([a, b]), '同样输入必须稳定');
+  assert.notEqual(id1, shareIdFromHashes([{ ...a, sha256: hash('c') }, b]), '内容变化应换 ID');
+  assert.notEqual(id1, shareIdFromHashes([{ ...a, path: 'a2.txt' }, b]), '路径变化应换 ID');
+  assert.notEqual(id1, shareIdFromHashes([{ ...a, size: 4 }, b]), '大小变化应换 ID');
+  assert.equal(id1, shareIdFromHashes([a, b]), '同样输入必须稳定');
 });
 
 test('传输 ID 拒绝非法哈希', () => {
   assert.throws(
-    () => transferIdFromHashes([{ path: 'a', size: 1, sha256: 'xyz' }]),
+    () => shareIdFromHashes([{ path: 'a', size: 1, sha256: 'xyz' }]),
     (e) => e.code === 'bad-hash',
   );
-  assert.throws(() => transferIdFromHashes([]), (e) => e.code === 'empty-selection');
+  assert.throws(() => shareIdFromHashes([]), (e) => e.code === 'empty-selection');
 });
 
 test('分块数量与区间', () => {
