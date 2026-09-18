@@ -23,6 +23,21 @@
 | git 小步迭代 | 每个功能一次提交（含配套测试），见 `git log --oneline` | — |
 | 所有功能代码都有配套测试 | Rust 64 例 + JS 89 例 + 真实浏览器 e2e + 冒烟脚本 | `scripts/test-all.sh`、`scripts/smoke.sh`、`node scripts/e2e-browser.mjs` |
 
+## 下载（v0.1.0）
+
+从 [Releases](https://github.com/Jnternet/file_sharer/releases/latest) 下载单文件可执行程序，
+校验和见同页 `SHA256SUMS-0.1.0.txt`：
+
+| 平台 | 文件 | 说明 |
+|---|---|---|
+| Linux x86_64 | `file_sharer-v0.1.0-linux-x86_64-musl` | 静态链接，任何发行版直接运行（推荐） |
+| Linux x86_64 | `file_sharer-v0.1.0-linux-x86_64` | 动态链接 glibc 版本 |
+| Windows x86_64 | `file_sharer-v0.1.0-windows-x86_64.exe` | 双击或在 PowerShell 中运行 |
+
+```bash
+chmod +x file_sharer-v0.1.0-linux-x86_64-musl && ./file_sharer-v0.1.0-linux-x86_64-musl
+```
+
 ## 快速开始
 
 ```bash
