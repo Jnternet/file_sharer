@@ -9,7 +9,13 @@ import { createShareService } from './lib/share-service.js';
 import { createDownloadService } from './lib/download-service.js';
 import { Sender } from './lib/sender.js';
 import { buildShareEntry, describeEntry } from './lib/share-index.js';
-import { entriesFromDataTransfer, entriesFromFileList, sourceFromEntries } from './lib/files.js';
+import {
+  entriesFromDataTransfer,
+  entriesFromDirectoryHandle,
+  entriesFromFileList,
+  sourceFromEntries,
+  supportsDirectoryPicker,
+} from './lib/files.js';
 import { DEFAULT_CHUNK_SIZE } from './lib/plan.js';
 import { KIND, indexRequestMessage } from './lib/protocol.js';
 import { buildStoreZip, safeFileName, zipNameFor } from './lib/zip.js';
@@ -367,10 +373,38 @@ async function saveSingleFile(shareId, fileIndex, path, mime) {
   }
 }
 
-async function forgetTransfer(shareId) {
-  await downloads.deleteTransfer(shareId);
-  state.transfers.delete(shareId);
-  renderRegistry();
+/**
+ * 选择文件夹：
+ *  1) 能用 File System Access（https/localhost）就直接选目录，结构最可靠；
+ *  2) 否则用 <input webkitdirectory>（Chromium/Firefox 都支持）；
+ *  3) 都不支持时明确提示可以拖放文件夹。
+ */
+async function pickFolder() {
+  if (supportsDirectoryPicker()) {
+    try {
+      const handle = await window.showDirectoryPicker({ mode: 'read' });
+      const entries = await entriesFromDirectoryHandle(handle);
+      if (entries.length === 0) {
+        toast('这个文件夹里没有文件');
+        return;
+      }
+      await shareEntries(entries);
+      return;
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        return;
+      }
+      toast(`目录选择不可用（${error?.message ?? error}），改用系统文件夹选择器`);
+    }
+  }
+
+  const input = $('folder-input');
+  // 用属性值判断真实支持，避免某些浏览器给出"能选文件但选不了文件夹"的假象
+  if (input.webkitdirectory !== true) {
+    toast('这个浏览器不支持"选择文件夹"：把文件夹直接拖到上方区域即可（同样保留目录结构）');
+    return;
+  }
+  input.click();
 }
 
 // ---------------------------------------------------------------- 登记（只记录位置）
@@ -579,7 +613,6 @@ function renderRegistry() {
         actions.append(button('打包下载 .zip', () => void saveZip(entry.shareId)));
       }
       actions.append(button('保存', () => void saveTransfer(entry.shareId)));
-      actions.append(button('删除', () => void forgetTransfer(entry.shareId), 'btn btn-ghost btn-small'));
     } else {
       const tag = document.createElement('span');
       tag.className = status === 'failed' ? 'tag tag-err' : 'tag';
@@ -631,7 +664,7 @@ function wireUi() {
     $('file-input').click();
   });
   $('pick-file').addEventListener('click', () => $('file-input').click());
-  $('pick-folder').addEventListener('click', () => $('folder-input').click());
+  $('pick-folder').addEventListener('click', () => void pickFolder());
 
   for (const inputId of [
     ['file-input', false],

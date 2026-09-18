@@ -43,7 +43,8 @@
             <button id="pick-folder" type="button" class="btn btn-ghost">登记文件夹</button>
           </div>
           <input id="file-input" type="file" multiple hidden />
-          <input id="folder-input" type="file" webkitdirectory hidden />
+          <!-- webkitdirectory 是 Chromium/Firefox 都认的目录选择属性；directory 是标准写法，一并写上 -->
+          <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
         </div>
         <div id="hash-progress" class="hash-progress" hidden>
           <span>正在本地校验（上传前 SHA-256，不发送数据）…</span>

@@ -279,6 +279,37 @@ async function registryState(client, context) {
   );
 }
 
+/** 走 <input webkitdirectory> 的真实 change 事件登记文件夹（等价于系统选择器选完后触发）。 */
+async function registerFolderViaInput(client, context, specs) {
+  const normalized = specs.map((spec) => ({ path: spec.path, bytes: Array.from(spec.bytes) }));
+  return evaluate(
+    client,
+    context,
+    `(async () => {
+      const specs = ${JSON.stringify(normalized)};
+      const input = document.getElementById('folder-input');
+      const attributes = {
+        webkitdirectory: input.hasAttribute('webkitdirectory'),
+        webkitdirectorySupported: input.webkitdirectory === true,
+        directory: input.hasAttribute('directory'),
+        multiple: input.multiple,
+        type: input.type,
+      };
+      const transfer = new DataTransfer();
+      for (const spec of specs) {
+        const name = spec.path.split('/').pop();
+        const file = new File([new Uint8Array(spec.bytes)], name, { type: 'application/octet-stream' });
+        Object.defineProperty(file, 'webkitRelativePath', { value: spec.path });
+        transfer.items.add(file);
+      }
+      input.files = transfer.files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      return attributes;
+    })()`,
+  );
+}
+
 async function storedBytes(client, context, shareId, fileIndex) {
   const result = await evaluate(
     client,
@@ -515,6 +546,21 @@ async function main() {
   if (readdirSync(DOWNLOAD_DIR).length !== 0) {
     throw new Error('没有点击保存之前，下载目录必须为空');
   }
+  const removeButton = await evaluate(
+    client,
+    tabB,
+    `(() => {
+      const rows = [...document.querySelectorAll('#registry-list .row')];
+      const row = rows.find((item) => item.querySelector('.row-title')?.textContent === ${JSON.stringify(SINGLE.path)});
+      if (!row) {
+        return 'missing-row';
+      }
+      return [...row.querySelectorAll('button')].map((item) => item.textContent).join(',');
+    })()`,
+  );
+  if (String(removeButton).includes('删除')) {
+    throw new Error(`完成后的操作里不应再有删除按钮：${removeButton}`);
+  }
   if (!(await clickAction(client, tabB, SINGLE.path, '保存'))) {
     throw new Error('找不到「保存」按钮');
   }
@@ -543,7 +589,15 @@ async function main() {
   log(`点「保存」后才落盘：${downloaded.name} 与源文件逐字节一致，且此前 savedCount=0`);
 
   // ------------------------------------------------ 4) 文件夹 + ZIP
-  await registerEntries(client, tabA, FOLDER, FOLDER.map((file) => file.path));
+  const folderAttributes = await registerFolderViaInput(client, tabA, FOLDER);
+  if (
+    !folderAttributes.webkitdirectory ||
+    !folderAttributes.webkitdirectorySupported ||
+    !folderAttributes.directory ||
+    !folderAttributes.multiple
+  ) {
+    throw new Error(`文件夹输入框缺少目录属性：${JSON.stringify(folderAttributes)}`);
+  }
   await clickRefresh(client, tabB);
   const folderRow = await waitFor('B 看到文件夹条目', async () => {
     const state = await registryState(client, tabB);

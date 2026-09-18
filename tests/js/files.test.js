@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { entriesFromFileList, sourceFromEntries } from '../../web/lib/files.js';
+import {
+  entriesFromDirectoryHandle,
+  entriesFromFileList,
+  sourceFromEntries,
+  supportsDirectoryPicker,
+} from '../../web/lib/files.js';
 
 /** 最小 File 替身：只实现 slice().arrayBuffer()。 */
 function fakeFile(name, bytes, { webkitRelativePath = '', type = '' } = {}) {
@@ -64,4 +69,53 @@ test('读取越界序号报错', async () => {
   const source = sourceFromEntries([{ file: fakeFile('a.txt', new Uint8Array([1])), path: 'a.txt' }]);
   assert.throws(() => source.file(5), RangeError);
   await assert.rejects(source.read(5, 0, 1), RangeError);
+});
+
+test('supportsDirectoryPicker 只在有 API 时为真', () => {
+  assert.equal(supportsDirectoryPicker({ showDirectoryPicker: () => {} }), true);
+  assert.equal(supportsDirectoryPicker({}), false);
+  assert.equal(supportsDirectoryPicker(undefined), false);
+});
+
+function fakeDirHandle(name, children) {
+  return {
+    kind: 'directory',
+    name,
+    async *values() {
+      for (const child of children) {
+        yield child;
+      }
+    },
+  };
+}
+
+function fakeFileHandle(name, file) {
+  return {
+    kind: 'file',
+    name,
+    async getFile() {
+      return file;
+    },
+  };
+}
+
+test('entriesFromDirectoryHandle 递归展开目录结构（与 input 结果同构）', async () => {
+  const root = fakeDirHandle('相册', [
+    fakeFileHandle('a.txt', fakeFile('a.txt', new Uint8Array([1, 2]))),
+    fakeDirHandle('子目录', [fakeFileHandle('b.bin', fakeFile('b.bin', new Uint8Array([3])))]),
+    fakeDirHandle('空目录', []),
+  ]);
+
+  const entries = await entriesFromDirectoryHandle(root);
+  assert.deepEqual(
+    entries.map((entry) => entry.path),
+    ['相册/a.txt', '相册/子目录/b.bin'],
+  );
+  assert.equal(entries[0].file.name, 'a.txt');
+  assert.equal(entries[1].file.size, 1);
+});
+
+test('entriesFromDirectoryHandle 参数校验', async () => {
+  await assert.rejects(entriesFromDirectoryHandle(null), TypeError);
+  await assert.rejects(entriesFromDirectoryHandle({ kind: 'directory' }), TypeError);
 });

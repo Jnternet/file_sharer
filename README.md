@@ -102,6 +102,9 @@ node scripts/e2e-browser.mjs   # 真实浏览器端到端（需要 firefox 与 p
   其它请求会收到 `busy` 并提示稍后重试。
 - 接收数据存在**下载者浏览器**的 IndexedDB 中；必须点「保存」/「打包下载」才写入磁盘。
 - 非安全上下文限制：不使用 `crypto.subtle` / `showSaveFilePicker`；保存走 `Blob` + `<a download>`。
+- **选择文件夹**：优先用 File System Access（`showDirectoryPicker`，https/localhost 可用），
+  否则用 `<input webkitdirectory directory multiple>`（Chromium 与 Firefox 都支持）；
+  两者都不可用时界面会提示直接把文件夹拖进来（拖放同样保留目录结构、自动区分单文件/文件夹）。
 - 单个 ZIP 上限 4 GiB（ZIP32），超出时降级为逐文件保存。
 
 ## 开发约定

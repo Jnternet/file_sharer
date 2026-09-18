@@ -65,6 +65,33 @@ export async function entriesFromDataTransfer(dataTransfer) {
   return out;
 }
 
+/** 当前环境是否支持 File System Access 的目录选择（需要安全上下文：https 或 localhost）。 */
+export function supportsDirectoryPicker(scope = globalThis) {
+  return typeof scope?.showDirectoryPicker === 'function';
+}
+
+/**
+ * 把 FileSystemDirectoryHandle 递归展开成 [{file, path}]。
+ * 与 <input webkitdirectory> 的结果结构一致，方便共用后续登记流程。
+ */
+export async function entriesFromDirectoryHandle(handle, prefix = undefined) {
+  if (!handle || typeof handle.values !== 'function') {
+    throw new TypeError('entriesFromDirectoryHandle 需要 FileSystemDirectoryHandle');
+  }
+  // 与 <input webkitdirectory> 保持一致：路径里带上顶层文件夹名
+  const base = prefix ?? `${handle.name ?? ''}/`;
+  const out = [];
+  for await (const entry of handle.values()) {
+    if (entry?.kind === 'file') {
+      const file = await entry.getFile();
+      out.push({ file, path: `${base}${entry.name}` });
+    } else if (entry?.kind === 'directory') {
+      out.push(...(await entriesFromDirectoryHandle(entry, `${base}${entry.name}/`)));
+    }
+  }
+  return out;
+}
+
 async function collectEntry(entry, prefix, out) {
   if (entry.isFile) {
     const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
