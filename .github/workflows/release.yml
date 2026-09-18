@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x86_64（静态 musl）
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary: target/x86_64-unknown-linux-musl/release/file_sharer
+            asset: file_sharer-linux-x86_64-musl
+          - label: Linux x86_64（glibc）
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: target/x86_64-unknown-linux-gnu/release/file_sharer
+            asset: file_sharer-linux-x86_64
+          - label: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: target/x86_64-pc-windows-msvc/release/file_sharer.exe
+            asset: file_sharer-windows-x86_64.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: 安装 musl 链接器
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: 构建
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: 冒烟（Linux，确认单产物可跑）
+        if: matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          WORK="$(mktemp -d)"
+          cp "${{ matrix.binary }}" "$WORK/file_sharer"
+          cd "$WORK"
+          ./file_sharer --port 0 > server.log 2>&1 &
+          PID=$!
+          for _ in $(seq 1 50); do
+            URL="$(grep -o 'http://127\.0\.0\.1:[0-9]*/' server.log | head -1 || true)"
+            [ -n "$URL" ] && break
+            sleep 0.2
+          done
+          curl -fsS "$URL" | grep -q "局域网文件记录区"
+          curl -fsS "${URL}api/info" | grep -q '"records":"none"'
+          kill "$PID"
+
+      - name: 准备发布文件
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.binary }}" "dist/${{ matrix.asset }}"
+          cd dist && sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/*
+
+      - name: 附加到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

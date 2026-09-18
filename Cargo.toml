@@ -2,8 +2,14 @@
 name = "file_sharer"
 version = "0.1.0"
 edition = "2024"
-description = "局域网实时文件/文件夹直传工具：单文件产物 + 网页访问 + P2P 不落地 + 断点续传 + 自动 SHA-256 校验"
+authors = ["Jnternet"]
+description = "局域网文件记录区：只登记文件位置、点击才传输、服务器只做定向转发（单产物 + 网页 + 断点续传 + SHA-256 校验）"
 license = "MIT"
+repository = "https://github.com/Jnternet/file_sharer"
+homepage = "https://github.com/Jnternet/file_sharer"
+readme = "README.md"
+keywords = ["lan", "file-transfer", "websocket", "axum", "self-hosted"]
+categories = ["web-programming::http-server", "command-line-utilities"]
 
 [dependencies]
 anyhow = "1"
