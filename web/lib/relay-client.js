@@ -129,6 +129,10 @@ export function createRelayClient({
       return;
     }
     socket = socketFactory(url);
+    // 浏览器 WebSocket 默认 binaryType='blob'，不设置的话二进制帧会变成 Blob 被丢掉
+    if ('binaryType' in socket) {
+      socket.binaryType = 'arraybuffer';
+    }
     socket.onopen = () => {
       send({ t: MESSAGE.HELLO, name });
       emit({ type: 'open' });

@@ -60,7 +60,7 @@ body {
   border-radius: 12px;
   background: linear-gradient(135deg, var(--accent), #7d5cff);
   color: #fff;
-  font-size: 20px;
+  font-size: 18px;
 }
 
 h1 {
@@ -83,10 +83,23 @@ h2 {
   font-size: 12.5px;
 }
 
+.hint {
+  margin-top: 10px;
+}
+
 .status {
   display: flex;
-  gap: 14px;
+  gap: 12px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .pill {
@@ -111,17 +124,7 @@ h2 {
   border-color: color-mix(in srgb, var(--err) 40%, transparent);
 }
 
-.name-field,
-.target-field {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-input[type="text"],
-select {
+input[type="text"] {
   background: var(--card-2);
   color: var(--text);
   border: 1px solid var(--border);
@@ -132,13 +135,13 @@ select {
 
 main {
   display: grid;
-  grid-template-columns: minmax(320px, 1.1fr) minmax(260px, 0.9fr);
+  grid-template-columns: minmax(300px, 1fr) minmax(260px, 0.8fr);
   gap: 16px;
   padding: 18px 22px 8px;
   align-items: start;
 }
 
-.transfers-card {
+.wide {
   grid-column: 1 / -1;
 }
 
@@ -158,7 +161,7 @@ main {
 .dropzone {
   border: 1.5px dashed var(--border);
   border-radius: var(--radius);
-  padding: 22px 16px;
+  padding: 18px 16px;
   text-align: center;
   transition: border-color 0.15s, background 0.15s;
 }
@@ -190,13 +193,18 @@ main {
   color: #fff;
   border: none;
   border-radius: 10px;
-  padding: 8px 14px;
+  padding: 7px 13px;
   font: inherit;
   cursor: pointer;
 }
 
 .btn:hover {
   filter: brightness(1.08);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .btn-ghost {
@@ -208,11 +216,6 @@ main {
 .btn-small {
   padding: 4px 9px;
   font-size: 12.5px;
-  margin-left: auto;
-}
-
-.target-field {
-  margin-top: 14px;
 }
 
 .hash-progress {
@@ -238,8 +241,7 @@ progress {
   color: var(--muted);
 }
 
-.peer-list,
-.transfers {
+.list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -247,63 +249,37 @@ progress {
   gap: 8px;
 }
 
-.peer {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.row {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-2);
   padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--card-2);
-}
-
-.peer .who {
-  flex: 1;
-  min-width: 0;
-}
-
-.peer .name {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.peer .meta {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.transfer {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
   display: grid;
-  gap: 8px;
-  background: var(--card-2);
+  gap: 6px;
 }
 
-.transfer-head {
+.row-head {
   display: flex;
-  gap: 10px;
   align-items: baseline;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
-.transfer-title {
+.row-title {
   font-weight: 600;
   word-break: break-all;
 }
 
-.transfer-meta {
+.row-meta {
   color: var(--muted);
   font-size: 12.5px;
 }
 
-.transfer-actions {
+.row-actions {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .tag {
@@ -324,25 +300,16 @@ progress {
   border-color: color-mix(in srgb, var(--err) 40%, transparent);
 }
 
-.file-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  font-size: 12.5px;
+.hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
   color: var(--muted);
-  display: grid;
-  gap: 3px;
-  max-height: 140px;
-  overflow: auto;
 }
 
 .footer {
   padding: 14px 22px 26px;
   color: var(--muted);
   font-size: 12.5px;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .toast {

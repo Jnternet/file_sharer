@@ -37,8 +37,10 @@ fi
 echo "== 服务地址 $URL =="
 
 echo "-- 首页（内嵌资源）"
-curl -fsS "$URL" | grep -q "局域网文件直传"
-curl -fsS "${URL}app.js" | grep -q "createSignalClient"
+curl -fsS "$URL" | grep -q "局域网文件记录区"
+curl -fsS "${URL}app.js" | grep -q "createRelayClient"
+curl -fsS "${URL}lib/share-index.js" | grep -q "buildShareEntry"
+curl -fsS "${URL}lib/share-service.js" | grep -q "createShareService"
 curl -fsS "${URL}styles.css" | grep -q -- "--accent"
 curl -fsS "${URL}lib/sha256.js" | grep -q "class Sha256"
 
@@ -47,7 +49,8 @@ curl -fsS "${URL}api/health" | grep -q '"status":"ok"'
 INFO="$(curl -fsS "${URL}api/info")"
 echo "$INFO"
 echo "$INFO" | grep -q '"persistence":"none"'
-echo "$INFO" | grep -q '"peers":0'
+echo "$INFO" | grep -q '"records":"none"'
+echo "$INFO" | grep -q '"sessions":0'
 
 echo "-- 不存在的路径 / 不支持的写接口"
 test "$(curl -s -o /dev/null -w '%{http_code}' "${URL}nope.js")" = "404"

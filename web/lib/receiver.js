@@ -61,7 +61,8 @@ export class Receiver {
     return this.#store.listTransfers();
   }
 
-  async readChunks(shareId, fileIndex) {
+  /** 返回异步迭代器（不要包成 Promise，否则 for await 无法迭代）。 */
+  readChunks(shareId, fileIndex) {
     return this.#store.readChunks(shareId, fileIndex);
   }
 

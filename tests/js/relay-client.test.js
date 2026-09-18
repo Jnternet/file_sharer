@@ -7,6 +7,7 @@ class FakeSocket {
   constructor(url) {
     this.url = url;
     this.readyState = 0;
+    this.binaryType = 'blob'; // 与浏览器默认一致
     this.sent = [];
     this.closed = false;
     FakeSocket.instances.push(this);
@@ -137,6 +138,7 @@ test('二进制响应以 binary 事件派发', () => {
   const socket = FakeSocket.instances[0];
   socket.open();
 
+  assert.equal(socket.binaryType, 'arraybuffer', '必须显式设置 binaryType，否则收到的是 Blob');
   socket.receiveBinary(new Uint8Array([9, 8, 7]));
   const binary = events.find((event) => event.type === 'binary');
   assert.deepEqual([...binary.bytes], [9, 8, 7]);

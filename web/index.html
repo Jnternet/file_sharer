@@ -4,79 +4,73 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>局域网文件直传</title>
+    <title>局域网文件记录区</title>
     <link rel="stylesheet" href="/styles.css" />
     <link rel="icon" href="data:," />
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
-        <span class="logo">⇄</span>
+        <span class="logo">▤</span>
         <div>
-          <h1>局域网文件直传</h1>
-          <p class="subtitle">浏览器之间点对点传输 · 服务器零存储 · 每次启动都是空桶</p>
+          <h1>局域网文件记录区</h1>
+          <p class="subtitle">
+            只登记文件位置 · 别人点「下载」才开始传输 · 服务器只转发，不记录不留存
+          </p>
         </div>
       </div>
       <div class="status">
         <span id="conn-status" class="pill pill-warn">连接中…</span>
-        <label class="name-field">
+        <label class="field">
           我的名字
           <input id="name-input" type="text" maxlength="32" placeholder="访客" />
         </label>
+        <button id="refresh" type="button" class="btn btn-ghost">刷新记录区</button>
       </div>
     </header>
 
     <main>
-      <section class="card send-card">
-        <h2>发送</h2>
+      <section class="card">
+        <h2>我的记录（本机分享）</h2>
         <div id="dropzone" class="dropzone" tabindex="0">
-          <p class="drop-title">拖入文件或文件夹</p>
-          <p class="drop-hint">自动识别：单个文件直传，多个文件/文件夹按目录结构打包</p>
+          <p class="drop-title">把文件或文件夹拖到这里登记</p>
+          <p class="drop-hint">
+            登记时只读取名称/大小并本地算出 SHA-256，<strong>不会发送任何文件内容</strong>；
+            等有人点「下载」时才读取并逐块发送。
+          </p>
           <div class="drop-actions">
-            <button id="pick-file" type="button" class="btn">选择文件</button>
-            <button id="pick-folder" type="button" class="btn btn-ghost">选择文件夹</button>
+            <button id="pick-file" type="button" class="btn">登记文件</button>
+            <button id="pick-folder" type="button" class="btn btn-ghost">登记文件夹</button>
           </div>
           <input id="file-input" type="file" multiple hidden />
           <input id="folder-input" type="file" webkitdirectory hidden />
         </div>
-        <label class="target-field">
-          发送给
-          <select id="target-select">
-            <option value="all">全部在线设备</option>
-          </select>
-        </label>
         <div id="hash-progress" class="hash-progress" hidden>
-          <span>正在校验（上传前 SHA-256）…</span>
+          <span>正在本地校验（上传前 SHA-256，不发送数据）…</span>
           <progress id="hash-bar" max="100" value="0"></progress>
         </div>
+        <ul id="shared-list" class="list"></ul>
+        <p id="shared-empty" class="hint">还没有登记任何文件。</p>
       </section>
 
-      <section class="card peer-card">
+      <section class="card">
         <h2>在线设备 <span id="peer-count" class="badge">0</span></h2>
-        <ul id="peer-list" class="peer-list"></ul>
-        <p class="hint">
-          两台设备互相看到后即可直传。对方不在线时无法投递——文件不会经过服务器暂存。
-        </p>
+        <ul id="peer-list" class="list"></ul>
+        <p class="hint">记录区的内容来自这些设备，按需拉取；对端离线后它的记录自动消失。</p>
       </section>
 
-      <section class="card transfers-card">
-        <h2>
-          传输
-          <button id="clear-received" type="button" class="btn btn-ghost btn-small">清空接收区</button>
-        </h2>
-        <ul id="transfers" class="transfers"></ul>
-        <p id="transfers-empty" class="hint">还没有传输记录。</p>
+      <section class="card wide">
+        <h2>可下载记录</h2>
+        <ul id="registry-list" class="list"></ul>
+        <p id="registry-empty" class="hint">暂时没有可下载的记录。</p>
       </section>
     </main>
 
     <footer class="footer">
       <span id="server-info">—</span>
-      <span class="dot">·</span>
-      <span>接收区数据存在本机浏览器（IndexedDB），用于断点续传与重复下载。</span>
     </footer>
 
     <div id="toast" class="toast" hidden></div>
-
     <script type="module" src="/app.js"></script>
   </body>
 </html>
