@@ -61,6 +61,16 @@ export function detectPlatform(scope = globalThis) {
   const family = browserFamily(navigatorLike.userAgent ?? '');
   const ua = String(navigatorLike.userAgent ?? '');
   const isLinux = /Linux|X11/i.test(ua) && !/Android/i.test(ua);
+  const hasDirectoryCapability = folderPickerApi || folderInputSupported;
+  // Linux 桌面上旧的 webkitdirectory 会退化成"选择文件"对话框、拖放也可能受桌面环境限制，
+  // 所以只有在能拿到浏览器推荐的目录 API（File System Access）时才显示「登记文件夹」。
+  const folderButtonHiddenReason = isMobile
+    ? 'mobile'
+    : isLinux && !folderPickerApi
+      ? 'linux-no-directory-api'
+      : hasDirectoryCapability
+        ? null
+        : 'no-directory-support';
   return {
     isMobile,
     browser: family,
@@ -68,8 +78,8 @@ export function detectPlatform(scope = globalThis) {
     isLinux,
     folderPickerApi,
     folderInputSupported,
-    canPickFolder: folderPickerApi || folderInputSupported,
-    // 手机一律不显示；桌面端但如果浏览器两者都不支持，也不显示（避免弹出只能选文件的对话框）
-    shouldHideFolderButton: isMobile || !(folderPickerApi || folderInputSupported),
+    canPickFolder: hasDirectoryCapability,
+    folderButtonHiddenReason,
+    shouldHideFolderButton: folderButtonHiddenReason !== null,
   };
 }

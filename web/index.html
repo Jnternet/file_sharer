@@ -51,6 +51,13 @@
             （Firefox 对含中文/非 ASCII 名称的文件夹有已知问题），请把文件夹<strong>直接拖进</strong>这个区域——
             拖放会保留完整目录结构。Chrome/Edge 在 https 或 localhost 下也会走浏览器自带的目录选择。
           </p>
+          <p id="folder-hidden-hint" class="hint" hidden>
+            Linux 下不显示「登记文件夹」：系统文件选择器在 Linux 上无法可靠进入目录模式（会变成"选择文件"对话框），
+            拖放也可能受桌面环境影响。两个替代办法：
+            ① 用「登记文件」一次多选该文件夹里的文件（按文件夹登记，但目录层级会被压平）；
+            ② 先用文件管理器把文件夹<strong>压缩成 zip</strong>，再按单文件登记（解压后仍是完整目录结构）。
+            如果用 Chrome/Edge 通过 <code>localhost</code> 或 https 打开，系统目录选择器可用，该入口会自动出现。
+          </p>
           <input id="file-input" type="file" multiple hidden />
           <!-- webkitdirectory 是 Chromium/Firefox 都认的目录选择属性；directory 是标准写法，一并写上 -->
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden />

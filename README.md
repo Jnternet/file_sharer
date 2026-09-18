@@ -121,18 +121,22 @@ node scripts/e2e-browser.mjs   # 真实浏览器端到端（需要 firefox 与 p
   其它请求会收到 `busy` 并提示稍后重试。
 - 接收数据存在**下载者浏览器**的 IndexedDB 中；必须点「保存」/「打包下载」才写入磁盘。
 - 非安全上下文限制：不使用 `crypto.subtle` / `showSaveFilePicker`；保存走 `Blob` + `<a download>`。
-- **选择文件夹**：优先用 File System Access（`showDirectoryPicker`，https/localhost 可用），
-  否则用 `<input webkitdirectory directory multiple>`（Chromium 与 Firefox 都支持）；
-  两者都不可用时界面会提示直接把文件夹拖进来（拖放同样保留目录结构、自动区分单文件/文件夹）。
+- **选择文件夹**：优先用浏览器推荐的 File System Access（`showDirectoryPicker`，需 https 或 localhost）。
+  **Linux 上拿不到该 API 时不显示「登记文件夹」入口**（系统文件选择器无法可靠进入目录模式，
+  会退化成"选择文件"对话框），界面会同时给出替代办法（见下）。
+  Windows/macOS 上仍保留入口（那里的 `webkitdirectory` 可用）。
 - **手机访问**：自动识别移动端（含 iPadOS 桌面版 UA），**不显示「登记文件夹」**，
   只保留「登记文件」（可多选）并提示改用桌面端——移动浏览器普遍不支持选择整个文件夹。
 - **Firefox 选择文件夹的已知问题**：文件夹名含中文/非 ASCII 字符时，Firefox 的 `webkitdirectory`
   会返回空列表（[Mozilla Bug 1354580](https://bugzilla.mozilla.org/show_bug.cgi?id=1354580)，至今未修），
   表现为"选完没反应"。界面会明确提示，并引导改用**拖放文件夹**（推荐，不受影响）、
   Chrome/Edge，或「登记文件」多选；Chromium/Edge 走 `showDirectoryPicker`，不受该问题影响。
-- **Linux 上「登记文件夹」可能弹出"选择文件"对话框**（系统文件选择器/portal 未进入目录模式）：
-  此时界面会把多选到的文件**按文件夹条目登记**（不保留子目录）并说明原因；
-  要保留完整目录结构，请把文件夹**直接拖进登记区**（拖放会递归读取目录树）。
+- **Linux 下的文件夹分享（替代办法）**：入口被隐藏时，请用以下两种方式之一：
+  ① 用「登记文件」一次**多选**该文件夹里的文件——会按文件夹登记，但目录层级会被压平；
+  ② 先用文件管理器把文件夹**压缩成 zip**，再按单文件登记——解压后仍是完整目录结构。
+  另外，Chrome/Edge 通过 `http://localhost:8080`（或 https）访问时能拿到系统目录选择器，入口会自动出现。
+  如果希望保留拖放这条路径：拖放走 `webkitGetAsEntry`，不依赖文件选择器；
+  Wayland 下若拖放无效可试 `MOZ_ENABLE_WAYLAND=0 firefox`，Flatpak 版 Firefox 可更新 xdg-desktop-portal。
 - 单个 ZIP 上限 4 GiB（ZIP32），超出时降级为逐文件保存。
 
 ## 开发约定

@@ -705,8 +705,17 @@ function wireUi() {
   // 手机（或浏览器不支持目录选择）时不展示「登记文件夹」入口
   if (platform.shouldHideFolderButton) {
     $('pick-folder').hidden = true;
-    $('mobile-hint').hidden = false;
-    $('folder-input').disabled = true;
+    if (platform.folderButtonHiddenReason === 'mobile') {
+      $('mobile-hint').hidden = false;
+    } else {
+      const hint = $('folder-hidden-hint');
+      if (platform.folderButtonHiddenReason === 'no-directory-support') {
+        hint.textContent =
+          '这个浏览器不支持选择整个文件夹，因此不显示该入口：请用「登记文件」多选文件，' +
+          '或先把文件夹压缩成 zip 再按单文件登记。';
+      }
+      hint.hidden = false;
+    }
   }
 
   dropzone.addEventListener('click', (event) => {
@@ -749,7 +758,8 @@ function wireUi() {
     });
   }
 
-  if ((platform.isFirefox || platform.isLinux) && !platform.isMobile) {
+  // 入口可见时才提示"兼容性问题"；入口被隐藏时用另一条提示
+  if (!platform.shouldHideFolderButton && (platform.isFirefox || platform.isLinux)) {
     $('folder-compat-hint').hidden = false;
   }
 
@@ -789,7 +799,7 @@ function wireUi() {
 function explainEmptyFolderSelection() {
   const dropzone = $('dropzone');
   dropzone.classList.add('needs-drop');
-  $('folder-compat-hint').hidden = false;
+  revealFolderHint();
   setTimeout(() => dropzone.classList.remove('needs-drop'), 6000);
   dropzone.scrollIntoView({ block: 'center', behavior: 'smooth' });
   toast(
@@ -806,8 +816,14 @@ function explainEmptyFolderSelection() {
 function highlightDropzoneForFallback() {
   const dropzone = $('dropzone');
   dropzone.classList.add('needs-drop');
-  $('folder-compat-hint').hidden = false;
+  revealFolderHint();
   setTimeout(() => dropzone.classList.remove('needs-drop'), 6000);
+}
+
+/** 显示与当前环境匹配的提示（Linux 隐藏入口时用隐藏提示，否则用兼容提示）。 */
+function revealFolderHint() {
+  const target = platform.shouldHideFolderButton ? $('folder-hidden-hint') : $('folder-compat-hint');
+  target.hidden = false;
 }
 
 boot().catch((error) => {

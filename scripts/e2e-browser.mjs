@@ -743,12 +743,14 @@ async function main() {
         isFirefox: window.fileSharer.platform.isFirefox,
         toastHidden: document.getElementById('toast').hidden,
         toast: document.getElementById('toast').textContent,
-        hintHidden: document.getElementById('folder-compat-hint').hidden,
+        hintVisible:
+          !document.getElementById('folder-compat-hint').hidden ||
+          !document.getElementById('folder-hidden-hint').hidden,
         needsDrop: document.getElementById('dropzone').classList.contains('needs-drop'),
       };
     })()`,
   );
-  if (emptyFolderSelection.toastHidden || emptyFolderSelection.hintHidden || !emptyFolderSelection.needsDrop) {
+  if (emptyFolderSelection.toastHidden || !emptyFolderSelection.hintVisible || !emptyFolderSelection.needsDrop) {
     throw new Error(`空文件夹选择必须给出提示与拖放引导：${JSON.stringify(emptyFolderSelection)}`);
   }
   if (emptyFolderSelection.isFirefox && !emptyFolderSelection.toast.includes('Firefox')) {
@@ -790,13 +792,27 @@ async function main() {
     `(() => ({
       isMobile: window.fileSharer.platform.isMobile,
       shouldHide: window.fileSharer.platform.shouldHideFolderButton,
+      hiddenReason: window.fileSharer.platform.folderButtonHiddenReason,
       folderButtonHidden: document.getElementById('pick-folder').hidden,
       fileButtonHidden: document.getElementById('pick-file').hidden,
+      hiddenHintVisible: document.getElementById('folder-hidden-hint').hidden === false,
+      folderHintVisible: !(
+        document.getElementById('folder-compat-hint').hidden &&
+        document.getElementById('folder-hidden-hint').hidden
+      ),
     }))()`,
   );
-  if (desktopUi.isMobile || desktopUi.shouldHide || desktopUi.folderButtonHidden) {
-    throw new Error(`桌面端应当显示「登记文件夹」：${JSON.stringify(desktopUi)}`);
+  // e2e 跑在 Linux + Firefox：拿不到系统推荐的目录 API，按约定隐藏入口并给出明确替代说明
+  if (desktopUi.isMobile || !desktopUi.shouldHide || !desktopUi.folderButtonHidden) {
+    throw new Error(`Linux 桌面应隐藏「登记文件夹」：${JSON.stringify(desktopUi)}`);
   }
+  if (desktopUi.hiddenReason !== 'linux-no-directory-api') {
+    throw new Error(`隐藏原因应为 linux-no-directory-api：${JSON.stringify(desktopUi)}`);
+  }
+  if (!desktopUi.hiddenHintVisible || desktopUi.fileButtonHidden) {
+    throw new Error(`应显示替代办法提示并保留「登记文件」：${JSON.stringify(desktopUi)}`);
+  }
+  log('Linux 桌面：隐藏「登记文件夹」，显示替代办法提示，保留「登记文件」');
 
   const MOBILE_UA =
     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
@@ -824,6 +840,7 @@ async function main() {
         ua: navigator.userAgent.includes('iPhone'),
         isMobile: window.fileSharer.platform.isMobile,
         shouldHide: window.fileSharer.platform.shouldHideFolderButton,
+        hiddenReason: window.fileSharer.platform.folderButtonHiddenReason,
         folderButtonHidden: document.getElementById('pick-folder').hidden,
         mobileHintHidden: document.getElementById('mobile-hint').hidden,
         fileButtonHidden: document.getElementById('pick-file').hidden,
@@ -834,6 +851,9 @@ async function main() {
     }
     if (mobileUi.fileButtonHidden) {
       throw new Error('手机端仍应保留「登记文件」');
+    }
+    if (mobileUi.hiddenReason !== 'mobile') {
+      throw new Error(`手机端的隐藏原因应为 mobile：${JSON.stringify(mobileUi)}`);
     }
     log('手机访问检测通过：隐藏「登记文件夹」，保留「登记文件」并给出桌面端提示');
   } else {

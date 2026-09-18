@@ -122,3 +122,51 @@ test('isLinux 标记（用于提示"选择文件对话框"的已知情况）', (
   assert.equal(detectPlatform(fakeScope({ userAgent: UAS.windowsDesktop })).isLinux, false);
   assert.equal(detectPlatform(fakeScope({ userAgent: UAS.android })).isLinux, false, 'Android 不算桌面 Linux');
 });
+
+test('Linux 拿不到系统推荐 API 时隐藏「登记文件夹」', () => {
+  // Linux + Firefox：属性上"支持" webkitdirectory，但实际会弹成文件对话框 → 隐藏
+  const linuxFirefox = detectPlatform(
+    fakeScope({ userAgent: UAS.linuxDesktop, folderInput: true, secure: true }),
+  );
+  assert.equal(linuxFirefox.folderPickerApi, false);
+  assert.equal(linuxFirefox.folderInputSupported, true, '属性层面 Firefox 是"支持"的');
+  assert.equal(linuxFirefox.folderButtonHiddenReason, 'linux-no-directory-api');
+  assert.equal(linuxFirefox.shouldHideFolderButton, true);
+
+  // Linux + Chrome/Edge（localhost 或 https，能拿到推荐 API）→ 正常显示
+  const linuxChrome = detectPlatform(
+    fakeScope({ userAgent: UAS.linuxDesktop, folderInput: true, secure: true, folderApi: true }),
+  );
+  assert.equal(linuxChrome.folderButtonHiddenReason, null);
+  assert.equal(linuxChrome.shouldHideFolderButton, false);
+
+  // Windows 上旧的目录选择可用，不受影响
+  const windowsFirefox = detectPlatform(
+    fakeScope({
+      userAgent: UAS.windowsDesktop.replace('Chrome/121.0.0.0', 'Firefox/121.0'),
+      folderInput: true,
+    }),
+  );
+  assert.equal(windowsFirefox.isLinux, false);
+  assert.equal(windowsFirefox.shouldHideFolderButton, false);
+});
+
+test('隐藏原因分类：mobile / linux-no-directory-api / no-directory-support', () => {
+  assert.equal(
+    detectPlatform(fakeScope({ userAgent: UAS.iphone, folderInput: true })).folderButtonHiddenReason,
+    'mobile',
+  );
+  assert.equal(
+    detectPlatform(fakeScope({ userAgent: UAS.linuxDesktop })).folderButtonHiddenReason,
+    'linux-no-directory-api',
+  );
+  assert.equal(
+    detectPlatform(fakeScope({ userAgent: UAS.windowsDesktop })).folderButtonHiddenReason,
+    'no-directory-support',
+  );
+  assert.equal(
+    detectPlatform(fakeScope({ userAgent: UAS.windowsDesktop, folderInput: true }))
+      .folderButtonHiddenReason,
+    null,
+  );
+});
