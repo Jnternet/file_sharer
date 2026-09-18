@@ -19,6 +19,7 @@ import {
 import { DEFAULT_CHUNK_SIZE } from './lib/plan.js';
 import { KIND, indexRequestMessage } from './lib/protocol.js';
 import { buildStoreZip, safeFileName, zipNameFor } from './lib/zip.js';
+import { detectPlatform } from './lib/platform.js';
 
 const $ = (id) => document.getElementById(id);
 const NAME_KEY = 'file-sharer:name';
@@ -35,6 +36,8 @@ const state = {
   savedCount: 0,
   log: [], // 最近的事件（排查与自动化用）
 };
+
+const platform = detectPlatform();
 
 function recordEvent(source, event) {
   if (state.log.length > 400) {
@@ -689,6 +692,14 @@ function toast(message) {
 
 function wireUi() {
   const dropzone = $('dropzone');
+
+  // 手机（或浏览器不支持目录选择）时不展示「登记文件夹」入口
+  if (platform.shouldHideFolderButton) {
+    $('pick-folder').hidden = true;
+    $('mobile-hint').hidden = false;
+    $('folder-input').disabled = true;
+  }
+
   dropzone.addEventListener('click', (event) => {
     if (event.target.closest('button')) {
       return;
@@ -752,6 +763,7 @@ boot().catch((error) => {
 // 端到端测试用它登记等价对象、并检查"没有点击就不保存"。
 window.fileSharer = {
   state,
+  platform,
   shareEntries,
   buildZipFor,
   requestDownload,

@@ -728,6 +728,86 @@ async function main() {
     `断点续传通过：预先存在 IndexedDB 的 ${resumed.resumedBytes} 字节被跳过，只补传剩余部分，最终校验一致`,
   );
 
+  // ------------------------------------------------ 6) 手机访问：不显示「登记文件夹」
+  const desktopUi = await evaluate(
+    client,
+    tabA,
+    `(() => ({
+      isMobile: window.fileSharer.platform.isMobile,
+      shouldHide: window.fileSharer.platform.shouldHideFolderButton,
+      folderButtonHidden: document.getElementById('pick-folder').hidden,
+      fileButtonHidden: document.getElementById('pick-file').hidden,
+    }))()`,
+  );
+  if (desktopUi.isMobile || desktopUi.shouldHide || desktopUi.folderButtonHidden) {
+    throw new Error(`桌面端应当显示「登记文件夹」：${JSON.stringify(desktopUi)}`);
+  }
+
+  const MOBILE_UA =
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+  let mobileTab = null;
+  try {
+    await client.call('emulation.setUserAgentOverride', { userAgent: MOBILE_UA });
+    const created = await client.call('browsingContext.create', { type: 'tab' });
+    mobileTab = created.context;
+    await client.call('browsingContext.navigate', { context: mobileTab, url: BASE, wait: 'complete' });
+  } catch (error) {
+    log(`[提示] 浏览器不支持 UA 覆盖（${error.message}），改为在页面内验证检测逻辑`);
+  } finally {
+    try {
+      await client.call('emulation.setUserAgentOverride', { userAgent: '' });
+    } catch {
+      // 忽略清理失败
+    }
+  }
+
+  if (mobileTab) {
+    const mobileUi = await evaluate(
+      client,
+      mobileTab,
+      `(() => ({
+        ua: navigator.userAgent.includes('iPhone'),
+        isMobile: window.fileSharer.platform.isMobile,
+        shouldHide: window.fileSharer.platform.shouldHideFolderButton,
+        folderButtonHidden: document.getElementById('pick-folder').hidden,
+        mobileHintHidden: document.getElementById('mobile-hint').hidden,
+        fileButtonHidden: document.getElementById('pick-file').hidden,
+      }))()`,
+    );
+    if (!mobileUi.ua || !mobileUi.isMobile || !mobileUi.folderButtonHidden || mobileUi.mobileHintHidden) {
+      throw new Error(`手机端应隐藏「登记文件夹」并显示提示：${JSON.stringify(mobileUi)}`);
+    }
+    if (mobileUi.fileButtonHidden) {
+      throw new Error('手机端仍应保留「登记文件」');
+    }
+    log('手机访问检测通过：隐藏「登记文件夹」，保留「登记文件」并给出桌面端提示');
+  } else {
+    const detection = await evaluate(
+      client,
+      tabA,
+      `(async () => {
+        const { isMobileUserAgent, detectPlatform } = await import('/lib/platform.js');
+        const iphone = ${JSON.stringify(MOBILE_UA)};
+        const android = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/121.0 Mobile Safari/537.36';
+        const desktop = 'Mozilla/5.0 (X11; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0';
+        return {
+          iphone: isMobileUserAgent(iphone),
+          android: isMobileUserAgent(android),
+          desktop: isMobileUserAgent(desktop),
+          ipadDesktopMode: isMobileUserAgent(
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15',
+            { maxTouchPoints: 5 },
+          ),
+          detected: typeof detectPlatform === 'function',
+        };
+      })()`,
+    );
+    if (!detection.iphone || !detection.android || detection.desktop || !detection.ipadDesktopMode || !detection.detected) {
+      throw new Error(`手机 UA 检测逻辑不符合预期：${JSON.stringify(detection)}`);
+    }
+    log('手机访问检测通过（逻辑层）：iPhone/Android/iPad 桌面版 UA 均识别为手机，桌面 UA 不受影响');
+  }
+
   log('端到端全部通过：记录区只登记位置 → 点击才传输 → 校验通过仍需显式保存 → 服务器只转发');
   client.close();
   cleanup();

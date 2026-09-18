@@ -124,6 +124,8 @@ node scripts/e2e-browser.mjs   # 真实浏览器端到端（需要 firefox 与 p
 - **选择文件夹**：优先用 File System Access（`showDirectoryPicker`，https/localhost 可用），
   否则用 `<input webkitdirectory directory multiple>`（Chromium 与 Firefox 都支持）；
   两者都不可用时界面会提示直接把文件夹拖进来（拖放同样保留目录结构、自动区分单文件/文件夹）。
+- **手机访问**：自动识别移动端（含 iPadOS 桌面版 UA），**不显示「登记文件夹」**，
+  只保留「登记文件」（可多选）并提示改用桌面端——移动浏览器普遍不支持选择整个文件夹。
 - 单个 ZIP 上限 4 GiB（ZIP32），超出时降级为逐文件保存。
 
 ## 开发约定
