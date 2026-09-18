@@ -21,21 +21,21 @@
 | 自动 hash 校验（上传前 / 下载完成后） | 登记时预哈希；发送中复算（查源文件被改）；接收端落盘后复算比对，失败自动重传 | SHA-256 与 `node:crypto` 全长度对照 + 篡改/重传回环测试 |
 | 单文件/文件夹自动区分 | 单文件按文件登记并直接保存；多文件或带目录结构按文件夹登记（保留相对路径），完成后只提供「打包下载 .zip」 | `plan.test.js` + e2e（2 文件含子目录，ZIP 由 python3 解压校验） |
 | git 小步迭代 | 每个功能一次提交（含配套测试），见 `git log --oneline` | — |
-| 所有功能代码都有配套测试 | Rust 64 例 + JS 89 例 + 真实浏览器 e2e + 冒烟脚本 | `scripts/test-all.sh`、`scripts/smoke.sh`、`node scripts/e2e-browser.mjs` |
+| 所有功能代码都有配套测试 | Rust 64 例 + JS 104 例 + 真实浏览器 e2e + 冒烟脚本 | `scripts/test-all.sh`、`scripts/smoke.sh`、`node scripts/e2e-browser.mjs` |
 
-## 下载（v0.1.0）
+## 下载（v0.1.1）
 
 从 [Releases](https://github.com/Jnternet/file_sharer/releases/latest) 下载单文件可执行程序，
-校验和见同页 `SHA256SUMS-0.1.0.txt`：
+每个产物都附带同名 `.sha256` 校验文件：
 
 | 平台 | 文件 | 说明 |
 |---|---|---|
-| Linux x86_64 | `file_sharer-v0.1.0-linux-x86_64-musl` | 静态链接，任何发行版直接运行（推荐） |
-| Linux x86_64 | `file_sharer-v0.1.0-linux-x86_64` | 动态链接 glibc 版本 |
-| Windows x86_64 | `file_sharer-v0.1.0-windows-x86_64.exe` | 双击或在 PowerShell 中运行 |
+| Linux x86_64 | `file_sharer-linux-x86_64-musl` | 静态链接，任何发行版直接运行（推荐） |
+| Linux x86_64 | `file_sharer-linux-x86_64` | 动态链接 glibc 版本 |
+| Windows x86_64 | `file_sharer-windows-x86_64.exe` | 双击或在 PowerShell 中运行 |
 
 ```bash
-chmod +x file_sharer-v0.1.0-linux-x86_64-musl && ./file_sharer-v0.1.0-linux-x86_64-musl
+chmod +x file_sharer-linux-x86_64-musl && ./file_sharer-linux-x86_64-musl
 ```
 
 ## 快速开始
