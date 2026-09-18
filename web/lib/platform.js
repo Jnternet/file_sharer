@@ -61,22 +61,15 @@ export function detectPlatform(scope = globalThis) {
   const family = browserFamily(navigatorLike.userAgent ?? '');
   const ua = String(navigatorLike.userAgent ?? '');
   const isLinux = /Linux|X11/i.test(ua) && !/Android/i.test(ua);
-  // localhost 与 https 都算安全上下文；安全上下文才能用浏览器推荐的目录选择 API
-  const isSecureContext = Boolean(scope?.isSecureContext);
-  const recommendedDirectoryApi = typeof scope?.showDirectoryPicker === 'function';
   return {
     isMobile,
     browser: family,
     isFirefox: family === 'firefox',
     isLinux,
-    isSecureContext,
-    recommendedDirectoryApi,
     folderPickerApi,
     folderInputSupported,
     canPickFolder: folderPickerApi || folderInputSupported,
     // 手机一律不显示；桌面端但如果浏览器两者都不支持，也不显示（避免弹出只能选文件的对话框）
     shouldHideFolderButton: isMobile || !(folderPickerApi || folderInputSupported),
-    // Chromium 系在明文 http 下拿不到推荐 API：提示改用 https（--tls）
-    needsHttpsForDirectoryApi: family === 'chromium' && !isSecureContext && !recommendedDirectoryApi,
   };
 }

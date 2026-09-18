@@ -70,8 +70,6 @@ file_sharer 0.1.0 已启动（服务器只做定向转发：不记录、不留�
 file_sharer --port 9000          # 指定端口（0 = 随机空闲端口）
 file_sharer --bind 127.0.0.1     # 只监听本机（默认 0.0.0.0）
 file_sharer --max-sessions 20    # 在线会话上限（默认 64）
-file_sharer --tls                # 启用 HTTPS（自签名证书在内存中生成，不落盘；利于系统目录选择器）
-file_sharer --cert cert.pem --key key.pem   # 用你自己的证书（自动启用 HTTPS）
 file_sharer --quiet              # 只输出错误日志
 ```
 
@@ -135,22 +133,6 @@ node scripts/e2e-browser.mjs   # 真实浏览器端到端（需要 firefox 与 p
 - **Linux 上「登记文件夹」可能弹出"选择文件"对话框**（系统文件选择器/portal 未进入目录模式）：
   此时界面会把多选到的文件**按文件夹条目登记**（不保留子目录）并说明原因；
   要保留完整目录结构，请把文件夹**直接拖进登记区**（拖放会递归读取目录树）。
-
-### 目录选择出问题时怎么解决（推荐顺序）
-
-1. **用 HTTPS 打开页面（推荐）**：浏览器推荐的目录 API 是 File System Access
-   （`showDirectoryPicker`），它只在**安全上下文**（https 或 localhost）下可用。
-   用 `file_sharer --tls` 启动后，改用 `https://<局域网IP>:8080/` 访问
-   （自签名证书，浏览器首次会提示"不受信任"，选择继续即可），Chrome/Edge 就会走系统目录选择器。
-   也可以给页面配自己的证书：`--cert/--key`。
-2. **换用 Chrome/Edge**：Firefox 目前没有实现该 API，只能走旧的 `webkitdirectory`，
-   在部分 Linux 桌面（尤其 Flatpak 版 Firefox + xdg-desktop-portal）会退化成"选择文件"对话框。
-   Firefox 用户可尝试在 `about:config` 把 `widget.use-xdg-desktop-portal.file-picker` 设为 `0`
-   （强制 GTK 原生对话框，非 Flatpak 安装时有效）。
-3. **拖放文件夹**：拖放走的是 `webkitGetAsEntry`，会递归读取目录树，不依赖文件选择器。
-   Wayland 下若文件管理器拖放无效，可试 `MOZ_ENABLE_WAYLAND=0 firefox` 用 X11 后端。
-4. **完全兜底的两种办法**（任何浏览器都能用）：先用文件管理器把文件夹**压缩成 zip**，再按单文件登记；
-   或者用「登记文件」**多选**该文件夹里的文件（会按文件夹登记，但不保留子目录）。
 - 单个 ZIP 上限 4 GiB（ZIP32），超出时降级为逐文件保存。
 
 ## 开发约定

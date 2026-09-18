@@ -44,17 +44,9 @@ test('platform 字段兜底识别 Android', () => {
   assert.equal(isMobileUserAgent('Mozilla/5.0 (X11)', { platform: 'Android' }), true);
 });
 
-function fakeScope({
-  userAgent,
-  maxTouchPoints = 0,
-  platform = '',
-  folderInput = false,
-  folderApi = false,
-  secure = true,
-} = {}) {
+function fakeScope({ userAgent, maxTouchPoints = 0, platform = '', folderInput = false, folderApi = false } = {}) {
   return {
     navigator: { userAgent, maxTouchPoints, platform },
-    isSecureContext: secure,
     document: {
       createElement: () => {
         const element = { type: '', attributes: new Set(), setAttribute: (name) => element.attributes.add(name) };
@@ -129,33 +121,4 @@ test('isLinux 标记（用于提示"选择文件对话框"的已知情况）', (
   );
   assert.equal(detectPlatform(fakeScope({ userAgent: UAS.windowsDesktop })).isLinux, false);
   assert.equal(detectPlatform(fakeScope({ userAgent: UAS.android })).isLinux, false, 'Android 不算桌面 Linux');
-});
-
-test('安全上下文与推荐 API：chromium + 明文 http 时提示改用 https', () => {
-  const httpChrome = detectPlatform(
-    fakeScope({
-      userAgent: UAS.windowsDesktop,
-      folderInput: true,
-      secure: false,
-      folderApi: false,
-    }),
-  );
-  assert.equal(httpChrome.isSecureContext, false);
-  assert.equal(httpChrome.needsHttpsForDirectoryApi, true, '明文 http 下应提示用 --tls 走 https');
-  assert.equal(httpChrome.shouldHideFolderButton, false, 'webkitdirectory 仍可作为兜底');
-
-  const httpsChrome = detectPlatform(
-    fakeScope({ userAgent: UAS.windowsDesktop, folderInput: true, secure: true, folderApi: true }),
-  );
-  assert.equal(httpsChrome.recommendedDirectoryApi, true);
-  assert.equal(httpsChrome.needsHttpsForDirectoryApi, false, '已是安全上下文就不再提示');
-
-  const firefox = detectPlatform(
-    fakeScope({ userAgent: UAS.linuxDesktop, folderInput: true, secure: true }),
-  );
-  assert.equal(
-    firefox.needsHttpsForDirectoryApi,
-    false,
-    'Firefox 没有该 API，提示用 https 也没用，交给 Firefox 专用提示',
-  );
 });

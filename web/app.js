@@ -752,9 +752,6 @@ function wireUi() {
   if ((platform.isFirefox || platform.isLinux) && !platform.isMobile) {
     $('folder-compat-hint').hidden = false;
   }
-  if (platform.needsHttpsForDirectoryApi) {
-    $('tls-hint').hidden = false;
-  }
 
   for (const type of ['dragenter', 'dragover']) {
     dropzone.addEventListener(type, (event) => {
