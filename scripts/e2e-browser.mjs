@@ -621,8 +621,28 @@ async function main() {
     assertBytesEqual(stored.bytes, spec.bytes, `文件夹内容 ${spec.path}`);
     void index;
   }
-  if (!(await clickAction(client, tabB, folderRow.name, '打包下载'))) {
-    throw new Error('找不到「打包下载」按钮');
+  // 文件夹完成后：必须有「保存整个文件夹」，且不能有只能保存第一个文件的「保存」
+  const folderButtons = await evaluate(
+    client,
+    tabB,
+    `(() => {
+      const rows = [...document.querySelectorAll('#registry-list .row')];
+      const row = rows.find((item) => item.querySelector('.row-title')?.textContent === ${JSON.stringify(folderRow.name)});
+      return row ? [...row.querySelectorAll('button')].map((item) => item.textContent) : null;
+    })()`,
+  );
+  if (!folderButtons) {
+    throw new Error('找不到文件夹记录行');
+  }
+  if (!folderButtons.includes('保存整个文件夹')) {
+    throw new Error(`文件夹行缺少「保存整个文件夹」按钮：${JSON.stringify(folderButtons)}`);
+  }
+  if (folderButtons.includes('保存')) {
+    throw new Error(`文件夹行不应再有只保存第 1 个文件的「保存」按钮：${JSON.stringify(folderButtons)}`);
+  }
+
+  if (!(await clickAction(client, tabB, folderRow.name, '保存整个文件夹'))) {
+    throw new Error('找不到「保存整个文件夹」按钮');
   }
   const zipFile = await waitDownloadedFile('e2e目录.zip');
   const zipReport = await verifyZipWithPython(join(DOWNLOAD_DIR, zipFile.name));
@@ -631,7 +651,18 @@ async function main() {
       throw new Error(`ZIP 中 ${spec.path} 内容不符`);
     }
   }
-  log(`文件夹传输 + 打包通过：${FOLDER.length} 个文件保留目录结构，ZIP 由 python3 解压校验一致`);
+  const zipProgress = await evaluate(
+    client,
+    tabB,
+    `window.fileSharer.state.lastZipProgress ?? null`,
+  );
+  if (!zipProgress || zipProgress.processedBytes !== folderRow.totalBytes) {
+    throw new Error(`打包进度未按整包字节上报：${JSON.stringify(zipProgress)} != ${folderRow.totalBytes}`);
+  }
+  log(
+    `文件夹保存通过：点「保存整个文件夹」得到完整文件夹（${FOLDER.length} 个文件保留目录结构，` +
+      `ZIP 由 python3 解压校验一致，打包进度上报到 ${zipProgress.processedBytes}/${zipProgress.totalBytes} 字节）`,
+  );
 
   // ------------------------------------------------ 5) 断点续传（真实 IndexedDB）
   await registerEntries(client, tabA, [RESUMABLE], [RESUMABLE.path]);

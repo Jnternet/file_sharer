@@ -101,6 +101,11 @@ test('打包结果结构正确：目录条目、UTF-8 名称、store 方式、CR
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
   assert.ok(progress.length >= files.length, '应当按分块报告写入进度');
   assert.equal(progress.at(-1).processedBytes, totalBytes, '最终进度等于总字节数');
+  assert.equal(progress.at(-1).totalBytes, totalBytes, '进度里要带总量，界面才能算百分比');
+  assert.equal(progress.at(-1).ratio, 1);
+  for (let i = 1; i < progress.length; i++) {
+    assert.ok(progress[i].processedBytes > progress[i - 1].processedBytes, '进度必须单调递增');
+  }
 });
 
 test('与 Python zipfile 交叉验证（独立实现解压校验）', async (t) => {

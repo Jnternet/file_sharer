@@ -19,9 +19,9 @@
 | 每次启动后都是空桶 | 服务器内存里只有在线会话与转发绑定，进程退出即清空 | `/api/info` 的 `persistence:"none"`、`records:"none"`；架构测试禁止落盘 |
 | 断点续传 | 内容寻址 `shareId` + 接收端 IndexedDB 分块 + `resume-state` 协商偏移 | 回环测试「中断后只补传剩余块」+ e2e（预置分块被跳过） |
 | 自动 hash 校验（上传前 / 下载完成后） | 登记时预哈希；发送中复算（查源文件被改）；接收端落盘后复算比对，失败自动重传 | SHA-256 与 `node:crypto` 全长度对照 + 篡改/重传回环测试 |
-| 单文件/文件夹自动区分 | 单文件按文件登记；多文件或带目录结构按文件夹登记（保留相对路径），下载后可打包 ZIP | `plan.test.js` + 回环文件夹用例 + e2e（2 文件含子目录，ZIP 由 python3 解压校验） |
+| 单文件/文件夹自动区分 | 单文件按文件登记；多文件或带目录结构按文件夹登记（保留相对路径），完成后「保存整个文件夹」或打包 ZIP | `plan.test.js` + `folder-save.test.js` + e2e（2 文件含子目录，ZIP 由 python3 解压校验） |
 | git 小步迭代 | 每个功能一次提交（含配套测试），见 `git log --oneline` | — |
-| 所有功能代码都有配套测试 | Rust 64 例 + JS 86 例 + 真实浏览器 e2e + 冒烟脚本 | `scripts/test-all.sh`、`scripts/smoke.sh`、`node scripts/e2e-browser.mjs` |
+| 所有功能代码都有配套测试 | Rust 64 例 + JS 95 例 + 真实浏览器 e2e + 冒烟脚本 | `scripts/test-all.sh`、`scripts/smoke.sh`、`node scripts/e2e-browser.mjs` |
 
 ## 快速开始
 
@@ -44,7 +44,11 @@ file_sharer 0.1.0 已启动（服务器只做定向转发：不记录、不留�
 1. 分享方把文件/文件夹拖进「我的记录」区域（或点「登记文件」/「登记文件夹」）——此时只登记位置并本地算哈希；
 2. 下载方页面每 3 秒拉取一次（也可点「刷新记录区」），在「可下载记录」里看到该条目；
 3. 下载方点该条目的「下载」——这时分享方才开始读文件，数据经服务器**定向转发**到下载方；
-4. 下载方接收完成后提示"已校验（未保存）"，**点「保存」才真正落盘**（文件夹用「打包下载 .zip」）。
+4. 下载方接收完成后提示"已校验（未保存）"，**点「保存」才真正落盘**：
+   - 单文件：`保存` → 存成该文件；
+   - 文件夹：`保存整个文件夹` → 浏览器支持目录写入时（https / localhost）会把你选的目录当作目标，
+     按原目录结构逐个写入；不支持时自动降级为打包 ZIP（打包过程有百分比进度），
+     也可以直接点 `打包下载 .zip`。
 
 常用参数：
 
@@ -73,7 +77,8 @@ B ── ⑥用户点「保存」才写入磁盘
 - **校验**：流式 SHA-256（自实现——`http://192.168.x.x` 是非安全上下文，`crypto.subtle` 不可用）。
 - **续传**：`shareId = sha256(路径+大小+内容哈希)` 前 32 位；接收端按 `[shareId, fileIndex, chunkIndex]`
   存 IndexedDB，再次点击下载时只补传缺失分块。
-- **文件夹**：保留相对路径；下载后可打包为 store 模式 ZIP（> 4 GiB 降级为逐文件保存）。
+- **文件夹**：保留相对路径；下载后可「保存整个文件夹」（File System Access 逐文件写入所选目录）
+  或打包为 store 模式 ZIP（打包时按整包字节显示进度；> 4 GiB 降级为逐文件保存）。
 
 ## 测试
 
@@ -102,7 +107,7 @@ node scripts/e2e-browser.mjs   # 真实浏览器端到端（需要 firefox 与 p
   其它请求会收到 `busy` 并提示稍后重试。
 - 接收数据存在**下载者浏览器**的 IndexedDB 中；必须点「保存」/「打包下载」才写入磁盘。
 - 非安全上下文限制：不使用 `crypto.subtle` / `showSaveFilePicker`；保存走 `Blob` + `<a download>`。
-- **选择文件夹**：优先用 File System Access（`showDirectoryPicker`，https/localhost 可用），
+- **选择/保存文件夹**：优先用 File System Access（`showDirectoryPicker`，https/localhost 可用），
   否则用 `<input webkitdirectory directory multiple>`（Chromium 与 Firefox 都支持）；
   两者都不可用时界面会提示直接把文件夹拖进来（拖放同样保留目录结构、自动区分单文件/文件夹）。
 - 单个 ZIP 上限 4 GiB（ZIP32），超出时降级为逐文件保存。

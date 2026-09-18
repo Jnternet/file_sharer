@@ -114,6 +114,7 @@ export async function buildStoreZip(entries, { mtime = new Date(), onProgress } 
   const records = [];
   let offset = 0;
   let written = 0;
+  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
 
   for (const dir of directories) {
     const localOffset = offset;
@@ -152,7 +153,12 @@ export async function buildStoreZip(entries, { mtime = new Date(), onProgress } 
       produced += chunk.length;
       crc = crc32(chunk, crc);
       written += chunk.length;
-      onProgress?.({ path: file.path, processedBytes: written });
+      onProgress?.({
+        path: file.path,
+        processedBytes: written,
+        totalBytes,
+        ratio: totalBytes === 0 ? 1 : written / totalBytes,
+      });
     }
     if (produced !== file.size) {
       throw new ZipError(
