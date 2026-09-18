@@ -19,7 +19,6 @@ import {
 import { DEFAULT_CHUNK_SIZE } from './lib/plan.js';
 import { KIND, indexRequestMessage } from './lib/protocol.js';
 import { buildStoreZip, safeFileName, zipNameFor } from './lib/zip.js';
-import { supportsDirectoryWrite, writeFilesToDirectory } from './lib/folder-save.js';
 
 const $ = (id) => document.getElementById(id);
 const NAME_KEY = 'file-sharer:name';
@@ -365,69 +364,6 @@ async function saveZip(shareId) {
   }
 }
 
-/**
- * 保存整个文件夹：
- *  1) 浏览器支持目录写入（https/localhost）→ 让用户选一个目录，按原结构写进去；
- *  2) 否则降级为打包 ZIP（有进度提示）。
- */
-async function saveFolder(shareId) {
-  const transfer = state.transfers.get(shareId);
-  if (!transfer) {
-    return;
-  }
-  const files = folderFileEntries(shareId, transfer);
-  if (files.length === 0) {
-    toast('这条记录里没有文件');
-    return;
-  }
-
-  if (supportsDirectoryWrite()) {
-    let directory;
-    try {
-      directory = await window.showDirectoryPicker({ mode: 'readwrite' });
-    } catch (error) {
-      if (error?.name === 'AbortError') {
-        return;
-      }
-      toast(`无法写入所选目录（${error?.message ?? error}），改用打包 ZIP`);
-    }
-
-    if (directory) {
-      transfer.folderSave = {
-        status: 'saving',
-        processedBytes: 0,
-        totalBytes: transfer.entry.totalBytes,
-      };
-      renderRegistry(true);
-      try {
-        await writeFilesToDirectory(directory, files, {
-          onProgress: ({ processedBytes, totalBytes }) => {
-            transfer.folderSave = { status: 'saving', processedBytes, totalBytes };
-            renderRegistry(true);
-          },
-        });
-        transfer.folderSave = {
-          status: 'done',
-          processedBytes: transfer.entry.totalBytes,
-          totalBytes: transfer.entry.totalBytes,
-        };
-        transfer.saved = true;
-        state.savedCount += 1;
-        renderRegistry();
-        toast(`已把「${transfer.entry.name}」整个文件夹写入你选择的目录`);
-      } catch (error) {
-        transfer.folderSave = { status: 'failed', error: error.message };
-        renderRegistry();
-        toast(`写入文件夹失败：${error.message}（可改用打包下载）`);
-      }
-      return;
-    }
-  }
-
-  toast('当前浏览器不支持直接写入目录，改用打包 ZIP（保留完整目录结构）');
-  await saveZip(shareId);
-}
-
 function folderFileEntries(shareId, transfer) {
   return transfer.entry.files
     .slice()
@@ -445,17 +381,6 @@ async function buildZipFor(shareId, { onProgress } = {}) {
     throw new Error(`找不到记录 ${shareId}`);
   }
   return buildStoreZip(folderFileEntries(shareId, transfer), { onProgress });
-}
-
-async function saveSingleFile(shareId, fileIndex, path, mime) {
-  try {
-    const bytes = await collect(downloads.readChunks(shareId, fileIndex));
-    triggerDownload(new Blob([bytes], { type: mime ?? 'application/octet-stream' }), safeFileName(path));
-    state.savedCount += 1;
-    renderRegistry();
-  } catch (error) {
-    toast(`保存失败：${error.message}`);
-  }
 }
 
 /**
@@ -697,27 +622,27 @@ function renderRegistry(light = false) {
       actions.append(tag);
     } else if (status === 'verified') {
       const packing = transfer.zip?.status === 'packing' ? transfer.zip : null;
-      const writing = transfer.folderSave?.status === 'saving' ? transfer.folderSave : null;
-      const job = packing ?? writing;
       progress.hidden = false;
-      if (job) {
+      if (packing) {
         const percent =
-          job.totalBytes > 0 ? Math.min(100, Math.round((job.processedBytes / job.totalBytes) * 100)) : 100;
+          packing.totalBytes > 0
+            ? Math.min(100, Math.round((packing.processedBytes / packing.totalBytes) * 100))
+            : 100;
         progress.value = percent;
         const tag = document.createElement('span');
         tag.className = 'tag';
-        tag.textContent = `${packing ? '打包中' : '写入文件夹中'} ${percent}%`;
+        tag.textContent = `打包中 ${percent}%`;
         actions.append(tag);
       } else {
         progress.value = 100;
         const tag = document.createElement('span');
         tag.className = 'tag tag-ok';
-        tag.textContent = '已校验（未保存）';
+        tag.textContent = transfer.saved ? '已下载' : '已校验（未保存）';
         actions.append(tag);
         if (entry.kind === 'folder') {
-          actions.append(button('保存整个文件夹', () => void saveFolder(entry.shareId)));
+          // 文件夹只保留打包下载：ZIP 里就是完整目录结构
           actions.append(
-            button('打包下载 .zip', () => void saveZip(entry.shareId), 'btn btn-ghost btn-small'),
+            button('打包下载 .zip', () => void saveZip(entry.shareId)),
           );
         } else {
           actions.append(button('保存', () => void saveTransfer(entry.shareId)));
@@ -740,10 +665,7 @@ function renderRegistry(light = false) {
       for (const file of entry.files) {
         const row = document.createElement('div');
         row.className = 'row-meta';
-        row.textContent = `${file.path} · ${formatBytes(file.size)} `;
-        row.append(
-          button('保存此文件', () => void saveSingleFile(entry.shareId, file.i, file.path, file.mime), 'btn btn-ghost btn-small'),
-        );
+        row.textContent = `${file.path} · ${formatBytes(file.size)}`;
         item.append(row);
       }
     }
@@ -832,7 +754,6 @@ window.fileSharer = {
   state,
   shareEntries,
   buildZipFor,
-  saveFolder,
   requestDownload,
   saveTransfer,
   saveZip,
