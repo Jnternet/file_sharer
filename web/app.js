@@ -715,11 +715,22 @@ function wireUi() {
   ]) {
     $(inputId[0]).addEventListener('change', (event) => {
       const entries = entriesFromFileList(event.target.files);
+      const isFolderInput = inputId[1];
       event.target.value = '';
       if (entries.length > 0) {
         void shareEntries(entries);
+        return;
+      }
+      if (isFolderInput) {
+        // Firefox 已知问题（Bug 1354580）：文件夹名含中文/非 ASCII 时返回空列表。
+        // 这种情况不能静默失败，必须告诉用户可用的替代办法。
+        explainEmptyFolderSelection();
       }
     });
+  }
+
+  if (platform.isFirefox && !platform.isMobile) {
+    $('folder-compat-hint').hidden = false;
   }
 
   for (const type of ['dragenter', 'dragover']) {
@@ -752,6 +763,23 @@ function wireUi() {
   $('refresh').addEventListener('click', () => void refreshRegistry());
 
   window.addEventListener('beforeunload', () => relay?.close());
+}
+
+/** 文件夹选择拿到空列表时的解释与引导（Firefox 中文文件夹名的已知问题）。 */
+function explainEmptyFolderSelection() {
+  const dropzone = $('dropzone');
+  dropzone.classList.add('needs-drop');
+  $('folder-compat-hint').hidden = false;
+  setTimeout(() => dropzone.classList.remove('needs-drop'), 6000);
+  dropzone.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  toast(
+    platform.isFirefox
+      ? '没有读到文件夹内容：Firefox 对含中文/非 ASCII 名称的文件夹有已知问题（返回空列表）。' +
+          '请把文件夹直接拖到上方区域（推荐，拖放不受影响），或改用 Chrome/Edge，' +
+          '也可以用「登记文件」多选该文件夹里的文件。'
+      : '没有读到文件夹内容：可能是空文件夹，或浏览器没有授权目录访问。' +
+          '可以试试把文件夹直接拖到上方区域，或用「登记文件」多选文件。',
+  );
 }
 
 boot().catch((error) => {

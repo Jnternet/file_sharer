@@ -126,6 +126,10 @@ node scripts/e2e-browser.mjs   # 真实浏览器端到端（需要 firefox 与 p
   两者都不可用时界面会提示直接把文件夹拖进来（拖放同样保留目录结构、自动区分单文件/文件夹）。
 - **手机访问**：自动识别移动端（含 iPadOS 桌面版 UA），**不显示「登记文件夹」**，
   只保留「登记文件」（可多选）并提示改用桌面端——移动浏览器普遍不支持选择整个文件夹。
+- **Firefox 选择文件夹的已知问题**：文件夹名含中文/非 ASCII 字符时，Firefox 的 `webkitdirectory`
+  会返回空列表（[Mozilla Bug 1354580](https://bugzilla.mozilla.org/show_bug.cgi?id=1354580)，至今未修），
+  表现为"选完没反应"。界面会明确提示，并引导改用**拖放文件夹**（推荐，不受影响）、
+  Chrome/Edge，或「登记文件」多选；Chromium/Edge 走 `showDirectoryPicker`，不受该问题影响。
 - 单个 ZIP 上限 4 GiB（ZIP32），超出时降级为逐文件保存。
 
 ## 开发约定

@@ -729,6 +729,33 @@ async function main() {
   );
 
   // ------------------------------------------------ 6) 手机访问：不显示「登记文件夹」
+  // Firefox 已知问题（Bug 1354580）：文件夹名含中文/非 ASCII 时 webkitdirectory 返回空列表，
+  // 此时必须给出解释与可用替代，而不是静默失败。
+  const emptyFolderSelection = await evaluate(
+    client,
+    tabA,
+    `(async () => {
+      const input = document.getElementById('folder-input');
+      input.files = new DataTransfer().files; // 模拟"选了但返回空列表"
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return {
+        isFirefox: window.fileSharer.platform.isFirefox,
+        toastHidden: document.getElementById('toast').hidden,
+        toast: document.getElementById('toast').textContent,
+        hintHidden: document.getElementById('folder-compat-hint').hidden,
+        needsDrop: document.getElementById('dropzone').classList.contains('needs-drop'),
+      };
+    })()`,
+  );
+  if (emptyFolderSelection.toastHidden || emptyFolderSelection.hintHidden || !emptyFolderSelection.needsDrop) {
+    throw new Error(`空文件夹选择必须给出提示与拖放引导：${JSON.stringify(emptyFolderSelection)}`);
+  }
+  if (emptyFolderSelection.isFirefox && !emptyFolderSelection.toast.includes('Firefox')) {
+    throw new Error(`Firefox 下应给出针对性说明：${emptyFolderSelection.toast}`);
+  }
+  log('空文件夹选择提示通过：给出 Firefox 已知问题说明 + 拖放引导（不再静默失败）');
+
   const desktopUi = await evaluate(
     client,
     tabA,

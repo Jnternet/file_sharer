@@ -171,6 +171,11 @@ main {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+.dropzone.needs-drop {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
 .drop-title {
   margin: 0;
   font-weight: 600;

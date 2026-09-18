@@ -5,6 +5,24 @@
 
 const MOBILE_UA = /Android|iPhone|iPod|iPad|Windows Phone|webOS|BlackBerry|Opera Mini|IEMobile|Mobile/i;
 
+/** 浏览器家族（只区分会用到差异行为的几家）。 */
+export function browserFamily(userAgent = '') {
+  const ua = String(userAgent);
+  if (/Edg\/|EdgA\/|EdgiOS\//.test(ua)) {
+    return 'edge';
+  }
+  if (/Firefox\/|FxiOS\//.test(ua)) {
+    return 'firefox';
+  }
+  if (/Chrome\/|Chromium\/|CriOS\//.test(ua)) {
+    return 'chromium';
+  }
+  if (/Safari\//.test(ua)) {
+    return 'safari';
+  }
+  return 'other';
+}
+
 /** 根据 UA / 触控点数判断是否手机（含 iPadOS 13+ 自称 Macintosh 的情况）。 */
 export function isMobileUserAgent(userAgent = '', { maxTouchPoints = 0, platform = '' } = {}) {
   const ua = String(userAgent);
@@ -42,6 +60,8 @@ export function detectPlatform(scope = globalThis) {
   });
   return {
     isMobile,
+    browser: browserFamily(navigatorLike.userAgent ?? ''),
+    isFirefox: browserFamily(navigatorLike.userAgent ?? '') === 'firefox',
     folderPickerApi,
     folderInputSupported,
     canPickFolder: folderPickerApi || folderInputSupported,

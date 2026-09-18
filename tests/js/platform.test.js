@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { detectPlatform, isMobileUserAgent } from '../../web/lib/platform.js';
+import { browserFamily, detectPlatform, isMobileUserAgent } from '../../web/lib/platform.js';
 
 const UAS = {
   iphone:
@@ -89,4 +89,21 @@ test('缺少 document/showDirectoryPicker 也不抛错', () => {
   const result = detectPlatform({ navigator: { userAgent: UAS.linuxDesktop } });
   assert.equal(result.folderInputSupported, false);
   assert.equal(result.folderPickerApi, false);
+});
+
+test('浏览器家族识别（用于区分 Firefox 的目录选择已知问题）', () => {
+  assert.equal(browserFamily(UAS.linuxDesktop), 'firefox');
+  assert.equal(browserFamily(UAS.windowsDesktop), 'chromium');
+  assert.equal(browserFamily(UAS.macDesktop), 'chromium');
+  assert.equal(browserFamily(UAS.iphone), 'safari');
+  assert.equal(
+    browserFamily('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0'),
+    'edge',
+  );
+  assert.equal(browserFamily(''), 'other');
+});
+
+test('detectPlatform 带上 isFirefox 标记', () => {
+  assert.equal(detectPlatform(fakeScope({ userAgent: UAS.linuxDesktop })).isFirefox, true);
+  assert.equal(detectPlatform(fakeScope({ userAgent: UAS.windowsDesktop })).isFirefox, false);
 });
