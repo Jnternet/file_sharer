@@ -80,4 +80,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          # 不覆盖 Release 说明（说明由 CHANGELOG 维护），重复执行时直接覆盖同名产物
+          overwrite_files: true
