@@ -47,8 +47,9 @@
             <button id="pick-folder" type="button" class="btn btn-ghost">登记文件夹</button>
           </div>
           <p id="folder-compat-hint" class="hint" hidden>
-            Firefox 提示：若选择文件夹后没有反应（已知问题：文件夹名含中文/非 ASCII 字符时返回空列表），
-            请直接把文件夹拖进这个区域，拖放不受该问题影响。
+            提示：如果「登记文件夹」弹出的是"选择文件"对话框（Linux 上常见），或者选完没有任何反应
+            （Firefox 对含中文/非 ASCII 名称的文件夹有已知问题），请把文件夹<strong>直接拖进</strong>这个区域——
+            拖放会保留完整目录结构。Chrome/Edge 在 https 或 localhost 下也会走浏览器自带的目录选择。
           </p>
           <input id="file-input" type="file" multiple hidden />
           <!-- webkitdirectory 是 Chromium/Firefox 都认的目录选择属性；directory 是标准写法，一并写上 -->

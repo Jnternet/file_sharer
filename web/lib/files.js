@@ -47,6 +47,18 @@ export function entriesFromFileList(files) {
 }
 
 /**
+ * 判断这次选择是否真的来自"目录选择"。
+ *
+ * 目录上传时 webkitRelativePath 一定带上顶层文件夹名（含 `/`）；
+ * 若一个都没有，说明系统弹的其实是**文件对话框**（Linux 上常见），结构无从得知。
+ */
+export function selectionHasDirectoryStructure(files) {
+  return [...(files ?? [])].some(
+    (file) => typeof file?.webkitRelativePath === 'string' && file.webkitRelativePath.includes('/'),
+  );
+}
+
+/**
  * 拖放：用 webkitGetAsEntry 递归展开目录（浏览器只给扁平文件列表，
  * 目录结构必须靠 entry API 还原）。
  */

@@ -756,6 +756,34 @@ async function main() {
   }
   log('空文件夹选择提示通过：给出 Firefox 已知问题说明 + 拖放引导（不再静默失败）');
 
+  // Linux 常见情况：系统弹出的是"选择文件"对话框（拿不到 webkitRelativePath）。
+  // 此时仍要把选择登记下来，并说明如何保留目录结构。
+  const fileDialogFallback = await evaluate(
+    client,
+    tabA,
+    `(async () => {
+      const input = document.getElementById('folder-input');
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([new Uint8Array([1, 2, 3])], 'one.txt', { type: 'text/plain' }));
+      transfer.items.add(new File([new Uint8Array([4, 5])], 'two.txt', { type: 'text/plain' }));
+      input.files = transfer.files; // 没有 webkitRelativePath → 等价于文件对话框
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      return {
+        toast: document.getElementById('toast').textContent,
+        shared: [...window.fileSharer.state.shared.values()].map((entry) => ({ name: entry.name, kind: entry.kind, files: entry.fileCount })),
+      };
+    })()`,
+  );
+  if (!fileDialogFallback.toast.includes('选择文件')) {
+    throw new Error(`应说明系统弹的是文件对话框：${fileDialogFallback.toast}`);
+  }
+  const fallbackEntry = fileDialogFallback.shared.at(-1);
+  if (!fallbackEntry || fallbackEntry.kind !== 'folder' || fallbackEntry.files !== 2) {
+    throw new Error(`多选文件应登记为文件夹条目：${JSON.stringify(fileDialogFallback.shared)}`);
+  }
+  log('文件对话框兜底通过：多选文件被登记为文件夹条目，并提示用拖放保留目录结构');
+
   const desktopUi = await evaluate(
     client,
     tabA,

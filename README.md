@@ -130,6 +130,9 @@ node scripts/e2e-browser.mjs   # 真实浏览器端到端（需要 firefox 与 p
   会返回空列表（[Mozilla Bug 1354580](https://bugzilla.mozilla.org/show_bug.cgi?id=1354580)，至今未修），
   表现为"选完没反应"。界面会明确提示，并引导改用**拖放文件夹**（推荐，不受影响）、
   Chrome/Edge，或「登记文件」多选；Chromium/Edge 走 `showDirectoryPicker`，不受该问题影响。
+- **Linux 上「登记文件夹」可能弹出"选择文件"对话框**（系统文件选择器/portal 未进入目录模式）：
+  此时界面会把多选到的文件**按文件夹条目登记**（不保留子目录）并说明原因；
+  要保留完整目录结构，请把文件夹**直接拖进登记区**（拖放会递归读取目录树）。
 - 单个 ZIP 上限 4 GiB（ZIP32），超出时降级为逐文件保存。
 
 ## 开发约定

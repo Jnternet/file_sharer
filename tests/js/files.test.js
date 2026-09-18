@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   entriesFromDirectoryHandle,
   entriesFromFileList,
+  selectionHasDirectoryStructure,
   sourceFromEntries,
   supportsDirectoryPicker,
 } from '../../web/lib/files.js';
@@ -27,6 +28,34 @@ function fakeFile(name, bytes, { webkitRelativePath = '', type = '' } = {}) {
 }
 
 test('entriesFromFileList 保留文件夹相对路径', () => {
+  const plain = fakeFile('a.txt', new Uint8Array([1]));
+  const inFolder = fakeFile('b.txt', new Uint8Array([2]), { webkitRelativePath: '相册/b.txt' });
+
+  const entries = entriesFromFileList([plain, inFolder]);
+  assert.deepEqual(
+    entries.map((entry) => entry.path),
+    ['a.txt', '相册/b.txt'],
+  );
+});
+
+test('selectionHasDirectoryStructure：区分"目录选择"与"文件对话框"', () => {
+  const dirSelection = [
+    fakeFile('a.txt', new Uint8Array([1]), { webkitRelativePath: '相册/a.txt' }),
+    fakeFile('b.txt', new Uint8Array([1]), { webkitRelativePath: '相册/子目录/b.txt' }),
+  ];
+  assert.equal(selectionHasDirectoryStructure(dirSelection), true);
+
+  const fileDialogSelection = [
+    fakeFile('a.txt', new Uint8Array([1])),
+    fakeFile('b.txt', new Uint8Array([1])),
+  ];
+  assert.equal(selectionHasDirectoryStructure(fileDialogSelection), false, '没有相对路径说明是文件对话框');
+  assert.equal(selectionHasDirectoryStructure([]), false);
+  assert.equal(selectionHasDirectoryStructure(null), false);
+  assert.equal(selectionHasDirectoryStructure([{ name: 'x', webkitRelativePath: 42 }]), false);
+});
+
+test('entriesFromFileList 的旧断言保持', () => {
   const plain = fakeFile('a.txt', new Uint8Array([1]));
   const inFolder = fakeFile('b.txt', new Uint8Array([2]), { webkitRelativePath: '相册/b.txt' });
 

@@ -58,10 +58,14 @@ export function detectPlatform(scope = globalThis) {
     maxTouchPoints: navigatorLike.maxTouchPoints ?? 0,
     platform: navigatorLike.platform ?? '',
   });
+  const family = browserFamily(navigatorLike.userAgent ?? '');
+  const ua = String(navigatorLike.userAgent ?? '');
+  const isLinux = /Linux|X11/i.test(ua) && !/Android/i.test(ua);
   return {
     isMobile,
-    browser: browserFamily(navigatorLike.userAgent ?? ''),
-    isFirefox: browserFamily(navigatorLike.userAgent ?? '') === 'firefox',
+    browser: family,
+    isFirefox: family === 'firefox',
+    isLinux,
     folderPickerApi,
     folderInputSupported,
     canPickFolder: folderPickerApi || folderInputSupported,

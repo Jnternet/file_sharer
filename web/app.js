@@ -13,6 +13,7 @@ import {
   entriesFromDataTransfer,
   entriesFromDirectoryHandle,
   entriesFromFileList,
+  selectionHasDirectoryStructure,
   sourceFromEntries,
   supportsDirectoryPicker,
 } from './lib/files.js';
@@ -417,12 +418,16 @@ async function pickFolder() {
     toast('这个浏览器不支持"选择文件夹"：把文件夹直接拖到上方区域即可（同样保留目录结构）');
     return;
   }
+  // 有些引擎在点击时才决定对话框模式，这里把属性再显式设置一遍
+  input.setAttribute('webkitdirectory', '');
+  input.webkitdirectory = true;
+  input.multiple = true;
   input.click();
 }
 
 // ---------------------------------------------------------------- 登记（只记录位置）
 
-async function shareEntries(entries) {
+async function shareEntries(entries, { note } = {}) {
   if (state.busyHashing) {
     toast('上一次登记还在进行中');
     return;
@@ -440,7 +445,11 @@ async function shareEntries(entries) {
     });
     shares.add(entry, source);
     state.shared.set(entry.shareId, entry);
-    toast(`已登记「${entry.name}」：只记录了文件位置，等对方点击下载时才传输`);
+    toast(
+      note
+        ? `已登记「${entry.name}」：${note}`
+        : `已登记「${entry.name}」：只记录了文件位置，等对方点击下载时才传输`,
+    );
     renderShared();
   } catch (error) {
     toast(`登记失败：${error.message}`);
@@ -716,8 +725,19 @@ function wireUi() {
     $(inputId[0]).addEventListener('change', (event) => {
       const entries = entriesFromFileList(event.target.files);
       const isFolderInput = inputId[1];
+      const hasStructure = selectionHasDirectoryStructure(event.target.files);
       event.target.value = '';
       if (entries.length > 0) {
+        if (isFolderInput && !hasStructure) {
+          // 系统弹的其实是"选择文件"对话框（Linux 上常见）：登记照做，但要讲清楚限制与替代方案
+          highlightDropzoneForFallback();
+          void shareEntries(entries, {
+            note:
+              `系统弹出的是"选择文件"对话框（Linux 上常见），已按 ${entries.length} 个文件登记、` +
+              '不保留子目录；要保留完整目录结构，请把文件夹直接拖进来',
+          });
+          return;
+        }
         void shareEntries(entries);
         return;
       }
@@ -729,7 +749,7 @@ function wireUi() {
     });
   }
 
-  if (platform.isFirefox && !platform.isMobile) {
+  if ((platform.isFirefox || platform.isLinux) && !platform.isMobile) {
     $('folder-compat-hint').hidden = false;
   }
 
@@ -780,6 +800,14 @@ function explainEmptyFolderSelection() {
       : '没有读到文件夹内容：可能是空文件夹，或浏览器没有授权目录访问。' +
           '可以试试把文件夹直接拖到上方区域，或用「登记文件」多选文件。',
   );
+}
+
+/** 高亮登记区、常驻提示：引导用户改用拖放保留目录结构。 */
+function highlightDropzoneForFallback() {
+  const dropzone = $('dropzone');
+  dropzone.classList.add('needs-drop');
+  $('folder-compat-hint').hidden = false;
+  setTimeout(() => dropzone.classList.remove('needs-drop'), 6000);
 }
 
 boot().catch((error) => {

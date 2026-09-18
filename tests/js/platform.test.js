@@ -107,3 +107,18 @@ test('detectPlatform 带上 isFirefox 标记', () => {
   assert.equal(detectPlatform(fakeScope({ userAgent: UAS.linuxDesktop })).isFirefox, true);
   assert.equal(detectPlatform(fakeScope({ userAgent: UAS.windowsDesktop })).isFirefox, false);
 });
+
+test('isLinux 标记（用于提示"选择文件对话框"的已知情况）', () => {
+  assert.equal(detectPlatform(fakeScope({ userAgent: UAS.linuxDesktop })).isLinux, true);
+  assert.equal(
+    detectPlatform(
+      fakeScope({
+        userAgent:
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+      }),
+    ).isLinux,
+    true,
+  );
+  assert.equal(detectPlatform(fakeScope({ userAgent: UAS.windowsDesktop })).isLinux, false);
+  assert.equal(detectPlatform(fakeScope({ userAgent: UAS.android })).isLinux, false, 'Android 不算桌面 Linux');
+});
