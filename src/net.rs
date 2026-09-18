@@ -17,23 +17,23 @@ pub fn lan_ip() -> Option<IpAddr> {
     }
 }
 
-/// 根据监听地址决定打印哪些访问 URL（纯函数，便于测试）。
-pub fn advertised_urls(bind: IpAddr, port: u16, lan: Option<IpAddr>) -> Vec<String> {
+/// 根据监听地址与协议决定打印哪些访问 URL（纯函数，便于测试）。
+pub fn advertised_urls(scheme: &str, bind: IpAddr, port: u16, lan: Option<IpAddr>) -> Vec<String> {
     let mut out = Vec::new();
     match bind {
         IpAddr::V4(v4) if v4.is_unspecified() => {
-            out.push(format!("http://127.0.0.1:{port}/"));
+            out.push(format!("{scheme}://127.0.0.1:{port}/"));
             if let Some(ip) = lan {
-                out.push(format!("http://{ip}:{port}/"));
+                out.push(format!("{scheme}://{ip}:{port}/"));
             }
         }
         IpAddr::V6(v6) if v6.is_unspecified() => {
-            out.push(format!("http://[::1]:{port}/"));
+            out.push(format!("{scheme}://[::1]:{port}/"));
             if let Some(ip) = lan {
-                out.push(format!("http://{ip}:{port}/"));
+                out.push(format!("{scheme}://{ip}:{port}/"));
             }
         }
-        other => out.push(format!("http://{}:{}/", format_host(other), port)),
+        other => out.push(format!("{scheme}://{}:{}/", format_host(other), port)),
     }
     out
 }
@@ -52,6 +52,7 @@ mod tests {
     #[test]
     fn unspecified_bind_advertises_loopback_and_lan() {
         let urls = advertised_urls(
+            "http",
             "0.0.0.0".parse().unwrap(),
             8080,
             Some("192.168.1.7".parse().unwrap()),
@@ -64,13 +65,14 @@ mod tests {
 
     #[test]
     fn unspecified_bind_without_lan_only_shows_loopback() {
-        let urls = advertised_urls("0.0.0.0".parse().unwrap(), 1, None);
+        let urls = advertised_urls("http", "0.0.0.0".parse().unwrap(), 1, None);
         assert_eq!(urls, vec!["http://127.0.0.1:1/"]);
     }
 
     #[test]
     fn loopback_bind_is_not_advertised_as_lan() {
         let urls = advertised_urls(
+            "http",
             "127.0.0.1".parse().unwrap(),
             9000,
             Some("10.0.0.5".parse().unwrap()),
@@ -81,12 +83,12 @@ mod tests {
     #[test]
     fn specific_ip_and_ipv6_are_formatted() {
         assert_eq!(
-            advertised_urls("10.0.0.5".parse().unwrap(), 80, None),
+            advertised_urls("http", "10.0.0.5".parse().unwrap(), 80, None),
             vec!["http://10.0.0.5:80/"]
         );
         assert_eq!(
-            advertised_urls("::1".parse().unwrap(), 80, None),
-            vec!["http://[::1]:80/"]
+            advertised_urls("https", "::1".parse().unwrap(), 80, None),
+            vec!["https://[::1]:80/"]
         );
     }
 

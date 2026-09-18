@@ -28,15 +28,15 @@ fn production_part(text: &str) -> String {
 
 #[test]
 fn server_never_writes_to_disk() {
+    // 约束的本意是"服务器零存储"：不允许任何**写入**。
+    // 唯一的例外是 TLS：读取用户通过 --cert/--key 提供的证书文件（只读、必需），见下一个测试。
     const BANNED: &[&str] = &[
-        "std::fs",
         "tokio::fs",
         "fs::write",
         "fs::create",
         "fs::remove",
         "fs::rename",
         "File::create",
-        "File::open",
         "OpenOptions",
         "create_dir",
         "tempfile",
@@ -47,6 +47,21 @@ fn server_never_writes_to_disk() {
             assert!(
                 !production.contains(pattern),
                 "{} 中出现了落盘相关调用 `{pattern}`：服务器必须零存储",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn filesystem_reads_are_limited_to_tls_material() {
+    for (path, text) in rust_sources() {
+        let production = production_part(&text);
+        if production.contains("std::fs::read") || production.contains("fs::read(") {
+            assert_eq!(
+                path.file_name().unwrap(),
+                "tls.rs",
+                "{} 读取了文件系统：除 TLS 证书（tls.rs）外，服务器不应访问磁盘",
                 path.display()
             );
         }

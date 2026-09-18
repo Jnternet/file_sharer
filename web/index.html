@@ -51,6 +51,11 @@
             （Firefox 对含中文/非 ASCII 名称的文件夹有已知问题），请把文件夹<strong>直接拖进</strong>这个区域——
             拖放会保留完整目录结构。Chrome/Edge 在 https 或 localhost 下也会走浏览器自带的目录选择。
           </p>
+          <p id="tls-hint" class="hint" hidden>
+            当前是 <strong>http 明文</strong>访问：Chrome/Edge 只有在 <strong>https 或 localhost</strong> 下才能使用
+            浏览器推荐的系统目录选择器。用 <code>file_sharer --tls</code> 启动后改用 https 地址访问即可
+            （自签名证书，首次访问选择"继续"）；也可以先用「登记文件」多选，或把文件夹压缩成 zip 再按单文件登记。
+          </p>
           <input id="file-input" type="file" multiple hidden />
           <!-- webkitdirectory 是 Chromium/Firefox 都认的目录选择属性；directory 是标准写法，一并写上 -->
           <input id="folder-input" type="file" webkitdirectory directory multiple hidden />

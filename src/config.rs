@@ -1,6 +1,7 @@
 //! 启动参数与校验。
 
 use std::net::IpAddr;
+use std::path::PathBuf;
 
 use clap::Parser;
 
@@ -26,6 +27,18 @@ pub struct Config {
     /// 只输出错误日志
     #[arg(long)]
     pub quiet: bool,
+
+    /// 启用 HTTPS（自签名证书在内存中生成，不落盘；浏览器会提示证书不受信任，继续访问即可）
+    #[arg(long)]
+    pub tls: bool,
+
+    /// 使用现成证书（PEM），需与 --key 一起给出；给出后自动启用 HTTPS
+    #[arg(long, value_name = "FILE", requires = "key")]
+    pub cert: Option<PathBuf>,
+
+    /// 使用现成私钥（PEM），需与 --cert 一起给出
+    #[arg(long, value_name = "FILE", requires = "cert")]
+    pub key: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -35,6 +48,11 @@ pub enum ConfigError {
 }
 
 impl Config {
+    /// 是否走 HTTPS：显式 --tls，或提供了 --cert/--key。
+    pub fn uses_tls(&self) -> bool {
+        self.tls || (self.cert.is_some() && self.key.is_some())
+    }
+
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.max_sessions == 0 {
             return Err(ConfigError::MaxSessionsZero(self.max_sessions));
@@ -53,6 +71,9 @@ mod tests {
             port: 8080,
             max_sessions: 64,
             quiet: false,
+            tls: false,
+            cert: None,
+            key: None,
         }
     }
 
@@ -97,5 +118,35 @@ mod tests {
     #[test]
     fn cli_rejects_bad_ip() {
         assert!(Config::try_parse_from(["file_sharer", "--bind", "not-an-ip"]).is_err());
+    }
+
+    #[test]
+    fn tls_flag_and_cert_pair_parse() {
+        let tls = Config::try_parse_from(["file_sharer", "--tls"]).unwrap();
+        assert!(tls.tls);
+        assert!(tls.cert.is_none());
+
+        let paired = Config::try_parse_from([
+            "file_sharer",
+            "--cert",
+            "/tmp/cert.pem",
+            "--key",
+            "/tmp/key.pem",
+        ])
+        .unwrap();
+        assert_eq!(
+            paired.cert.as_deref(),
+            Some(std::path::Path::new("/tmp/cert.pem"))
+        );
+        assert_eq!(
+            paired.key.as_deref(),
+            Some(std::path::Path::new("/tmp/key.pem"))
+        );
+    }
+
+    #[test]
+    fn cert_without_key_is_rejected() {
+        assert!(Config::try_parse_from(["file_sharer", "--cert", "/tmp/cert.pem"]).is_err());
+        assert!(Config::try_parse_from(["file_sharer", "--key", "/tmp/key.pem"]).is_err());
     }
 }

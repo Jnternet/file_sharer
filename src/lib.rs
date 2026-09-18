@@ -6,6 +6,7 @@ pub mod assets;
 pub mod config;
 pub mod net;
 pub mod signal;
+pub mod tls;
 pub mod ws;
 
 use std::sync::Arc;
